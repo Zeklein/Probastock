@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Probastock — Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card-bg: #ffffff;
+    --text: #1a2233;
+    --text-muted: #6b7280;
+    --border: #e2e5ea;
+    --green: #16a34a;
+    --red: #dc2626;
+    --sector-espace: #3b82f6;
+    --sector-defense: #6b7280;
+    --sector-tech: #8b5cf6;
+    --sector-materiaux: #d97706;
+    --sector-energie: #059669;
+    --sector-telecoms: #0891b2;
+    --sector-benchmark: #64748b;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  header {
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  header h1 {
+    font-size: 20px;
+    margin: 0;
+  }
+
+  .tabs { display: flex; gap: 8px; }
+
+  .tab-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 14px;
+    cursor: pointer;
+    color: var(--text-muted);
+  }
+
+  .tab-btn.active {
+    background: var(--text);
+    color: white;
+    border-color: var(--text);
+  }
+
+  .btn-primary {
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 9px 16px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .btn-primary:hover { background: #1d4ed8; }
+
+  main { padding: 24px; max-width: 1400px; margin: 0 auto; }
+
+  .hidden { display: none !important; }
+
+  .sector-section {
+    margin-bottom: 32px;
+    border-left: 4px solid var(--sector-color, var(--sector-benchmark));
+    padding-left: 16px;
+  }
+
+  .sector-section h2 {
+    font-size: 16px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--sector-color, var(--sector-benchmark));
+    margin: 0 0 12px 0;
+  }
+
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 14px;
+  }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    position: relative;
+    cursor: pointer;
+  }
+  .card:hover { border-color: #94a3b8; }
+
+  .card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  .ticker { font-weight: 700; font-size: 15px; }
+  .name {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 2px 0 10px 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .archive-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .archive-btn:hover { background: #fee2e2; color: var(--red); }
+
+  .price-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .close-price { font-size: 20px; font-weight: 700; }
+
+  .return-badge {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .return-up { color: var(--green); background: #dcfce7; }
+  .return-down { color: var(--red); background: #fee2e2; }
+  .return-flat { color: var(--text-muted); background: #f1f5f9; }
+
+  .rsi-row { margin-bottom: 10px; }
+  .rsi-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 3px;
+  }
+  .rsi-track {
+    position: relative;
+    height: 6px;
+    border-radius: 3px;
+    background: linear-gradient(to right, #3b82f6 0%, #3b82f6 30%, #e2e5ea 30%, #e2e5ea 70%, #dc2626 70%, #dc2626 100%);
+  }
+  .rsi-marker {
+    position: absolute;
+    top: -3px;
+    width: 4px;
+    height: 12px;
+    background: var(--text);
+    border-radius: 2px;
+    transform: translateX(-50%);
+  }
+
+  .sparkline-wrap { height: 46px; }
+
+  #add-modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.4);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+
+  #add-modal {
+    background: white;
+    border-radius: 10px;
+    padding: 24px;
+    width: 360px;
+    max-width: 90vw;
+  }
+
+  #add-modal h3 { margin-top: 0; }
+
+  .field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--text-muted); }
+  .field input, .field select {
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+  }
+
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+  .btn-secondary {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    cursor: pointer;
+  }
+
+  #form-message {
+    margin-top: 12px;
+    font-size: 13px;
+    padding: 10px;
+    border-radius: 6px;
+    display: none;
+  }
+  #form-message.ok { display: block; background: #dcfce7; color: #166534; }
+  #form-message.err { display: block; background: #fee2e2; color: #991b1b; }
+
+  table.archived-table { width: 100%; border-collapse: collapse; background: var(--card-bg); border-radius: 8px; overflow: hidden; }
+  table.archived-table th, table.archived-table td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+  table.archived-table th { color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+
+  .reactivate-btn {
+    background: #dcfce7;
+    color: #166534;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .empty-note { color: var(--text-muted); font-size: 14px; padding: 20px 0; }
+
+  #detail-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 200;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 32px 20px;
+    overflow-y: auto;
+  }
+
+  #detail-panel {
+    background: var(--card-bg);
+    border-radius: 10px;
+    width: 100%;
+    max-width: 1000px;
+    padding: 24px 28px 28px;
+  }
+
+  #detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #detail-header h2 { margin: 0; font-size: 22px; }
+  #detail-header .sub { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+
+  .detail-close-btn {
+    background: none;
+    border: none;
+    font-size: 26px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--text-muted);
+  }
+  .detail-close-btn:hover { color: var(--text); }
+
+  .chart-section { margin-bottom: 22px; }
+  .chart-section h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    margin: 0 0 8px 0;
+  }
+
+  .chart-main-wrap { height: 320px; }
+  .chart-rsi-wrap { height: 140px; }
+  .chart-volume-wrap { height: 140px; }
+
+  .analysis-box {
+    background: #f8fafc;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    color: var(--text-muted);
+    font-size: 14px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Probastock</h1>
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-dashboard-btn" onclick="showTab('dashboard')">Tableau de bord</button>
+    <button class="tab-btn" id="tab-archived-btn" onclick="showTab('archived')">Actions archivées</button>
+  </div>
+  <button class="btn-primary" onclick="openAddModal()">+ Ajouter une action</button>
+</header>
+
+<main>
+  <div id="dashboard-view"><div class="empty-note">Chargement…</div></div>
+  <div id="archived-view" class="hidden"><div class="empty-note">Chargement…</div></div>
+</main>
+
+<div id="add-modal-overlay" class="hidden">
+  <div id="add-modal">
+    <h3>Ajouter une action</h3>
+    <form id="add-form">
+      <div class="field">
+        <label>Ticker</label>
+        <input type="text" id="f-ticker" required placeholder="ex: TSLA">
+      </div>
+      <div class="field">
+        <label>Nom</label>
+        <input type="text" id="f-name" required placeholder="ex: Tesla Inc">
+      </div>
+      <div class="field">
+        <label>Secteur</label>
+        <select id="f-sector"></select>
+      </div>
+      <div class="field">
+        <label>Type</label>
+        <select id="f-type">
+          <option value="action">Action</option>
+          <option value="ETF">ETF</option>
+        </select>
+      </div>
+      <div id="form-message"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" onclick="closeAddModal()">Annuler</button>
+        <button type="submit" class="btn-primary">Ajouter</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="detail-overlay" class="hidden">
+  <div id="detail-panel">
+    <div id="detail-header">
+      <div>
+        <h2 id="detail-ticker"></h2>
+        <div class="sub"><span id="detail-name"></span> — <span id="detail-sector"></span></div>
+      </div>
+      <button class="detail-close-btn" onclick="closeDetail()">&times;</button>
+    </div>
+    <div id="detail-body"></div>
+  </div>
+</div>
+
+<script>
+const SECTOR_COLOR_VARS = {
+  "Espace": "--sector-espace",
+  "Défense": "--sector-defense",
+  "Semi-conducteurs & Tech": "--sector-tech",
+  "Matériaux stratégiques / Terres rares": "--sector-materiaux",
+  "Énergie & Nucléaire": "--sector-energie",
+  "Télécoms/Connectivité": "--sector-telecoms",
+  "Benchmark": "--sector-benchmark",
+};
+
+const charts = {};
+
+function sectorColor(sector) {
+  const varName = SECTOR_COLOR_VARS[sector] || "--sector-benchmark";
+  return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+}
+
+function fmtReturn(r) {
+  if (r === null || r === undefined) return { text: "—", cls: "return-flat" };
+  const pct = (r * 100).toFixed(2);
+  if (r > 0) return { text: `+${pct}%`, cls: "return-up" };
+  if (r < 0) return { text: `${pct}%`, cls: "return-down" };
+  return { text: `${pct}%`, cls: "return-flat" };
+}
+
+function buildCard(sector, asset) {
+  const card = document.createElement("div");
+  card.className = "card";
+
+  const ret = fmtReturn(asset.return_1d);
+  const close = asset.close !== null && asset.close !== undefined ? asset.close.toFixed(2) : "N/A";
+  const rsi = asset.rsi_14;
+  const canvasId = `spark-${asset.ticker.replace(/[^a-zA-Z0-9]/g, "_")}`;
+
+  card.innerHTML = `
+    <div class="card-top">
+      <div>
+        <div class="ticker">${asset.ticker}</div>
+        <div class="name" title="${asset.name}">${asset.name}</div>
+      </div>
+      <button class="archive-btn" title="Archiver">Archiver</button>
+    </div>
+    <div class="price-row">
+      <span class="close-price">${close}</span>
+      <span class="return-badge ${ret.cls}">${ret.text}</span>
+    </div>
+    <div class="rsi-row">
+      <div class="rsi-label"><span>RSI-14</span><span>${rsi !== null && rsi !== undefined ? rsi.toFixed(1) : "N/A"}</span></div>
+      <div class="rsi-track">
+        ${rsi !== null && rsi !== undefined ? `<div class="rsi-marker" style="left:${rsi}%"></div>` : ""}
+      </div>
+    </div>
+    <div class="sparkline-wrap"><canvas id="${canvasId}"></canvas></div>
+  `;
+
+  card.addEventListener("click", () => openDetail(asset.ticker));
+  card.querySelector(".archive-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    archiveTicker(asset.ticker, card);
+  });
+
+  requestAnimationFrame(() => {
+    const ctx = card.querySelector(`#${CSS.escape(canvasId)}`);
+    if (!ctx || !asset.sparkline || asset.sparkline.length === 0) return;
+    const lineColor = asset.sparkline[asset.sparkline.length - 1].close >= asset.sparkline[0].close
+      ? getComputedStyle(document.documentElement).getPropertyValue("--green").trim()
+      : getComputedStyle(document.documentElement).getPropertyValue("--red").trim();
+    charts[canvasId] = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: asset.sparkline.map(p => p.trade_date),
+        datasets: [{
+          data: asset.sparkline.map(p => p.close),
+          borderColor: lineColor,
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.25,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: { x: { display: false }, y: { display: false } },
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      },
+    });
+  });
+
+  return card;
+}
+
+async function loadDashboard() {
+  const res = await fetch("/api/dashboard");
+  const data = await res.json();
+
+  Object.values(charts).forEach(c => c.destroy());
+  for (const key in charts) delete charts[key];
+
+  const view = document.getElementById("dashboard-view");
+  view.innerHTML = "";
+
+  const sectorOrder = ["Espace", "Défense", "Semi-conducteurs & Tech", "Matériaux stratégiques / Terres rares", "Énergie & Nucléaire", "Télécoms/Connectivité", "Benchmark"];
+  const sectors = sectorOrder.filter(s => data[s] && data[s].length > 0)
+    .concat(Object.keys(data).filter(s => !sectorOrder.includes(s) && data[s].length > 0));
+
+  populateSectorSelect(Object.keys(data));
+
+  if (sectors.length === 0) {
+    view.innerHTML = '<div class="empty-note">Aucune donnée de cours disponible pour le moment.</div>';
+    return;
+  }
+
+  for (const sector of sectors) {
+    const section = document.createElement("section");
+    section.className = "sector-section";
+    section.style.setProperty("--sector-color", sectorColor(sector));
+
+    const h2 = document.createElement("h2");
+    h2.textContent = `${sector} (${data[sector].length})`;
+    section.appendChild(h2);
+
+    const grid = document.createElement("div");
+    grid.className = "cards-grid";
+    data[sector].forEach(asset => grid.appendChild(buildCard(sector, asset)));
+    section.appendChild(grid);
+
+    view.appendChild(section);
+  }
+}
+
+async function archiveTicker(ticker, cardElement) {
+  const res = await fetch(`/api/assets/${encodeURIComponent(ticker)}/archive`, { method: "PATCH" });
+  if (res.ok) {
+    cardElement.remove();
+  } else {
+    const err = await res.json().catch(() => ({}));
+    alert(`Erreur lors de l'archivage : ${err.detail || res.statusText}`);
+  }
+}
+
+async function loadArchived() {
+  const view = document.getElementById("archived-view");
+  view.innerHTML = '<div class="empty-note">Chargement…</div>';
+
+  const res = await fetch("/api/assets");
+  const rows = (await res.json()).filter(a => !a.is_active);
+
+  if (rows.length === 0) {
+    view.innerHTML = '<div class="empty-note">Aucune action archivée.</div>';
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "archived-table";
+  table.innerHTML = `
+    <thead><tr><th>Ticker</th><th>Nom</th><th>Secteur</th><th>Type</th><th></th></tr></thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+
+  rows.forEach(a => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${a.ticker}</td>
+      <td>${a.name}</td>
+      <td>${a.sector || "—"}</td>
+      <td>${a.asset_type}</td>
+      <td></td>
+    `;
+    const btn = document.createElement("button");
+    btn.className = "reactivate-btn";
+    btn.textContent = "Réactiver";
+    btn.addEventListener("click", async () => {
+      const r = await fetch(`/api/assets/${encodeURIComponent(a.ticker)}/reactivate`, { method: "PATCH" });
+      if (r.ok) {
+        tr.remove();
+        loadDashboard();
+      } else {
+        const err = await r.json().catch(() => ({}));
+        alert(`Erreur lors de la réactivation : ${err.detail || r.statusText}`);
+      }
+    });
+    tr.lastElementChild.appendChild(btn);
+    tbody.appendChild(tr);
+  });
+
+  view.innerHTML = "";
+  view.appendChild(table);
+}
+
+function showTab(tab) {
+  document.getElementById("dashboard-view").classList.toggle("hidden", tab !== "dashboard");
+  document.getElementById("archived-view").classList.toggle("hidden", tab !== "archived");
+  document.getElementById("tab-dashboard-btn").classList.toggle("active", tab === "dashboard");
+  document.getElementById("tab-archived-btn").classList.toggle("active", tab === "archived");
+  if (tab === "archived") loadArchived();
+}
+
+function populateSectorSelect(sectors) {
+  const select = document.getElementById("f-sector");
+  if (select.dataset.populated) return;
+  select.innerHTML = sectors.map(s => `<option value="${s}">${s}</option>`).join("");
+  select.dataset.populated = "1";
+}
+
+function openAddModal() {
+  document.getElementById("form-message").className = "";
+  document.getElementById("form-message").textContent = "";
+  document.getElementById("add-form").reset();
+  document.getElementById("add-modal-overlay").classList.remove("hidden");
+}
+
+function closeAddModal() {
+  document.getElementById("add-modal-overlay").classList.add("hidden");
+}
+
+document.getElementById("add-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const payload = {
+    ticker: document.getElementById("f-ticker").value.trim(),
+    name: document.getElementById("f-name").value.trim(),
+    sector: document.getElementById("f-sector").value,
+    type: document.getElementById("f-type").value,
+  };
+  const msgBox = document.getElementById("form-message");
+
+  const res = await fetch("/api/assets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+
+  if (res.ok) {
+    msgBox.className = "ok";
+    msgBox.textContent = data.message;
+  } else {
+    msgBox.className = "err";
+    msgBox.textContent = data.detail || "Erreur inconnue.";
+  }
+});
+
+let detailCharts = {};
+
+async function openDetail(ticker) {
+  document.getElementById("detail-overlay").classList.remove("hidden");
+  document.getElementById("detail-ticker").textContent = ticker;
+  document.getElementById("detail-name").textContent = "";
+  document.getElementById("detail-sector").textContent = "";
+  document.getElementById("detail-body").innerHTML = '<div class="empty-note">Chargement…</div>';
+
+  const res = await fetch(`/api/assets/${encodeURIComponent(ticker)}/detail`);
+  if (!res.ok) {
+    document.getElementById("detail-body").innerHTML = '<div class="empty-note">Erreur de chargement des données.</div>';
+    return;
+  }
+  renderDetail(await res.json());
+}
+
+function closeDetail() {
+  document.getElementById("detail-overlay").classList.add("hidden");
+  Object.values(detailCharts).forEach(c => c.destroy());
+  detailCharts = {};
+}
+
+function renderDetail(data) {
+  document.getElementById("detail-ticker").textContent = data.ticker;
+  document.getElementById("detail-name").textContent = data.name;
+  document.getElementById("detail-sector").textContent = data.sector || "—";
+
+  document.getElementById("detail-body").innerHTML = `
+    <div class="chart-section">
+      <h3>Cours de clôture — SMA-20 / SMA-50</h3>
+      <div class="chart-main-wrap"><canvas id="detail-main-chart"></canvas></div>
+    </div>
+    <div class="chart-section">
+      <h3>RSI-14 (${data.indicators_history.length} derniers jours)</h3>
+      <div class="chart-rsi-wrap"><canvas id="detail-rsi-chart"></canvas></div>
+    </div>
+    <div class="chart-section">
+      <h3>Volume</h3>
+      <div class="chart-volume-wrap"><canvas id="detail-volume-chart"></canvas></div>
+    </div>
+    <div class="chart-section">
+      <h3>Analyse Probastock</h3>
+      <div class="analysis-box">Analyse IA pas encore disponible pour cet actif — sera activée une fois le moteur d'analyse construit.</div>
+    </div>
+  `;
+
+  Object.values(detailCharts).forEach(c => c.destroy());
+  detailCharts = {};
+
+  if (data.price_history.length === 0) {
+    document.querySelector(".chart-main-wrap").outerHTML = '<div class="empty-note">Aucun cours collecté pour cet actif pour le moment.</div>';
+    return;
+  }
+
+  const priceLabels = data.price_history.map(p => p.trade_date);
+  const closeValues = data.price_history.map(p => p.close);
+
+  // sma_20/sma_50 ne couvrent que les 90 derniers jours (cf. /api/assets/{ticker}/detail) :
+  // on aligne sur les dates de prix (historique complet) et on comble par null ailleurs,
+  // Chart.js (spanGaps) se charge d'ignorer les trous plutot que de tracer une fausse ligne.
+  const indicatorsByDate = Object.fromEntries(data.indicators_history.map(i => [i.trade_date, i]));
+  const sma20 = priceLabels.map(d => indicatorsByDate[d]?.sma_20 ?? null);
+  const sma50 = priceLabels.map(d => indicatorsByDate[d]?.sma_50 ?? null);
+
+  detailCharts.main = new Chart(document.getElementById("detail-main-chart"), {
+    type: "line",
+    data: {
+      labels: priceLabels,
+      datasets: [
+        { label: "Close", data: closeValues, borderColor: "#2563eb", borderWidth: 1.5, pointRadius: 0, tension: 0.15 },
+        { label: "SMA-20", data: sma20, borderColor: "#f59e0b", borderWidth: 1.5, pointRadius: 0, tension: 0.15, spanGaps: true },
+        { label: "SMA-50", data: sma50, borderColor: "#8b5cf6", borderWidth: 1.5, pointRadius: 0, tension: 0.15, spanGaps: true },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      scales: { x: { ticks: { maxTicksLimit: 10 } } },
+      plugins: { legend: { display: true, position: "top", labels: { boxWidth: 12 } } },
+    },
+  });
+
+  const rsiLabels = data.indicators_history.map(i => i.trade_date);
+  const rsiValues = data.indicators_history.map(i => i.rsi_14);
+
+  detailCharts.rsi = new Chart(document.getElementById("detail-rsi-chart"), {
+    type: "line",
+    data: {
+      labels: rsiLabels,
+      datasets: [
+        { label: "RSI-14", data: rsiValues, borderColor: "#0891b2", borderWidth: 1.5, pointRadius: 0, tension: 0.15, spanGaps: true },
+        { label: "Surachat (70)", data: rsiLabels.map(() => 70), borderColor: "#dc2626", borderWidth: 1, borderDash: [4, 4], pointRadius: 0 },
+        { label: "Survente (30)", data: rsiLabels.map(() => 30), borderColor: "#16a34a", borderWidth: 1, borderDash: [4, 4], pointRadius: 0 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { y: { min: 0, max: 100 }, x: { ticks: { maxTicksLimit: 8 } } },
+      plugins: { legend: { display: true, position: "top", labels: { boxWidth: 12 } } },
+    },
+  });
+
+  const volumeValues = data.price_history.map(p => p.volume);
+
+  detailCharts.volume = new Chart(document.getElementById("detail-volume-chart"), {
+    type: "bar",
+    data: {
+      labels: priceLabels,
+      datasets: [{ label: "Volume", data: volumeValues, backgroundColor: "#94a3b8" }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { x: { ticks: { maxTicksLimit: 10 } } },
+      plugins: { legend: { display: false } },
+    },
+  });
+}
+
+loadDashboard();
+</script>
+
+</body>
+</html>

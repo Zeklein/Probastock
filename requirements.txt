@@ -4,3 +4,6 @@ sqlalchemy==2.0.35
 psycopg2-binary==2.9.12
 python-dotenv==1.0.1
 yfinance==0.2.65
+pandas==3.0.3
+requests==2.33.1
+truststore==0.10.4

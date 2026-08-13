@@ -19,16 +19,9 @@ import yfinance as yf
 from sqlalchemy import text
 
 from app.db import engine
+from scripts._price_source import INSERT_SQL, SOURCE, extract_bars
 
-SOURCE = "yahoo_finance"
 PAUSE_BETWEEN_REQUESTS_SECONDS = 1.0  # ponytail: pause fixe, passer a un backoff si le rate-limit persiste
-
-INSERT_SQL = text(
-    """
-    INSERT INTO price_snapshots (asset_id, trade_date, fetched_at, open, high, low, close, volume, source, currency)
-    VALUES (:asset_id, :trade_date, :fetched_at, :open, :high, :low, :close, :volume, :source, :currency)
-    """
-)
 
 
 def fetch_last_bar(ticker: str):
@@ -36,18 +29,10 @@ def fetch_last_bar(ticker: str):
     hist = tk.history(period="1d")
     if hist.empty:
         raise ValueError("aucune donnee retournee par yfinance")
-    row = hist.iloc[-1]
-    if row["Close"] != row["Close"]:  # NaN check
+    bars = extract_bars(hist)
+    if not bars:
         raise ValueError("close manquant dans la donnee retournee")
-    return {
-        "trade_date": hist.index[-1].date(),
-        "open": float(row["Open"]) if row["Open"] == row["Open"] else None,
-        "high": float(row["High"]) if row["High"] == row["High"] else None,
-        "low": float(row["Low"]) if row["Low"] == row["Low"] else None,
-        "close": float(row["Close"]),
-        "volume": int(row["Volume"]) if row["Volume"] == row["Volume"] else None,
-        "currency": tk.fast_info.get("currency"),
-    }
+    return {**bars[-1], "currency": tk.fast_info.get("currency")}
 
 
 def main():

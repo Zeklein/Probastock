@@ -170,3 +170,42 @@ CREATE INDEX idx_pred_target_resolve  ON predictions(target_date, resolved_at)
 CREATE INDEX idx_pred_model_run       ON predictions(model_run_id);
 CREATE UNIQUE INDEX idx_pred_unique   ON predictions(asset_id, prediction_date, horizon_days, model_run_id);
 -- L'index unique garantit qu'un run ne produit pas deux prédictions identiques pour le même actif+horizon.
+
+
+-- -----------------------------------------------------------------------------
+-- Table : features_daily
+-- Indicateurs techniques dérivés de price_snapshots (un calcul déterministe,
+-- pas une observation brute) : contrairement aux tables précédentes, cette
+-- table n'est PAS append-only. Un recalcul écrase la ligne existante via
+-- UPSERT sur (asset_id, trade_date, feature_version). feature_version permet
+-- de faire cohabiter plusieurs versions de la logique de calcul si elle évolue
+-- (ex: passer d'un RSI à lissage de Wilder à un autre lissage) sans perdre
+-- l'historique des anciennes valeurs.
+-- -----------------------------------------------------------------------------
+CREATE TABLE features_daily (
+    id                  BIGSERIAL PRIMARY KEY,
+    asset_id            INTEGER     NOT NULL REFERENCES assets(id),
+    trade_date          DATE        NOT NULL,
+
+    return_1d           NUMERIC(8, 5),               -- rendement 1 jour (ex: 0.03500 = +3.5%)
+    return_5d           NUMERIC(8, 5),
+    return_20d          NUMERIC(8, 5),
+    volatility_20d      NUMERIC(8, 5),                -- écart-type des rendements journaliers sur 20j
+
+    sma_20              NUMERIC(12, 4),
+    sma_50              NUMERIC(12, 4),
+    rsi_14              NUMERIC(6, 3)
+                        CHECK (rsi_14 BETWEEN 0 AND 100),
+
+    volume_avg_20d      NUMERIC(16, 4),
+    volume_ratio        NUMERIC(10, 4),               -- volume du jour / volume_avg_20d, ex: 1.3500 = +35% vs moyenne
+
+    feature_version     TEXT        NOT NULL DEFAULT 'v1',
+    computed_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE features_daily IS 'Indicateurs techniques dérivés de price_snapshots. Recalculable : UPSERT sur (asset_id, trade_date, feature_version), à la différence des tables append-only en amont.';
+COMMENT ON COLUMN features_daily.computed_at IS 'Horodatage du (re)calcul, mis à jour à chaque UPSERT.';
+
+CREATE UNIQUE INDEX idx_features_unique     ON features_daily(asset_id, trade_date, feature_version);
+CREATE INDEX idx_features_asset_date        ON features_daily(asset_id, trade_date DESC);
