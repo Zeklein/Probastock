@@ -251,6 +251,28 @@
 
   .empty-note { color: var(--text-muted); font-size: 14px; padding: 20px 0; }
 
+  .tracking-filters { margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+  .tracking-filters select { padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+
+  table.tracking-table { width: 100%; border-collapse: collapse; background: var(--card-bg); border-radius: 8px; overflow: hidden; font-size: 13px; }
+  table.tracking-table th, table.tracking-table td {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.tracking-table th { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  table.tracking-table tr.ticker-group-start td { border-top: 2px solid var(--border); }
+  table.tracking-table td.ticker-cell { font-weight: 700; }
+  table.tracking-table tr.row-aggregate { background: #f8fafc; font-weight: 600; }
+
+  .status-badge { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; display: inline-block; }
+  .status-correct { color: var(--green); background: #dcfce7; }
+  .status-incorrect { color: var(--red); background: #fee2e2; }
+  .status-neutral { color: var(--text-muted); background: #f1f5f9; }
+  .status-pending, .status-no_data { color: var(--text-muted); background: #f1f5f9; font-style: italic; }
+  .status-return { font-size: 10px; color: var(--text-muted); margin-left: 4px; }
+
   #detail-overlay {
     position: fixed; inset: 0;
     background: rgba(0,0,0,0.5);
@@ -305,7 +327,7 @@
   .chart-rsi-wrap { height: 140px; }
   .chart-volume-wrap { height: 140px; }
 
-  .analysis-box {
+  .analysis-placeholder, .analysis-loading, .analysis-error {
     background: #f8fafc;
     border: 1px dashed var(--border);
     border-radius: 8px;
@@ -314,6 +336,35 @@
     font-size: 14px;
     text-align: center;
   }
+  .analysis-placeholder { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  .analysis-error { color: var(--red); border-color: #fecaca; background: #fef2f2; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+
+  .analysis-result {
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .analysis-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: center;
+    font-size: 13px;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .analysis-header .return-badge { font-size: 12px; padding: 4px 10px; }
+  .analysis-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+    margin-bottom: 12px;
+  }
+  .analysis-grid h4 { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margin: 0 0 6px 0; }
+  .analysis-grid ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.5; }
+  .analysis-meta { font-size: 11px; color: var(--text-muted); margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -322,6 +373,7 @@
   <h1>Probastock</h1>
   <div class="tabs">
     <button class="tab-btn active" id="tab-dashboard-btn" onclick="showTab('dashboard')">Tableau de bord</button>
+    <button class="tab-btn" id="tab-tracking-btn" onclick="showTab('tracking')">Suivi des prédictions</button>
     <button class="tab-btn" id="tab-archived-btn" onclick="showTab('archived')">Actions archivées</button>
   </div>
   <button class="btn-primary" onclick="openAddModal()">+ Ajouter une action</button>
@@ -329,6 +381,13 @@
 
 <main>
   <div id="dashboard-view"><div class="empty-note">Chargement…</div></div>
+  <div id="tracking-view" class="hidden">
+    <div class="tracking-filters">
+      <label for="tracking-ticker-select">Titre :</label>
+      <select id="tracking-ticker-select" onchange="loadTracking(this.value || null)"></select>
+    </div>
+    <div id="tracking-table-wrap"><div class="empty-note">Chargement…</div></div>
+  </div>
   <div id="archived-view" class="hidden"><div class="empty-note">Chargement…</div></div>
 </main>
 
@@ -571,10 +630,91 @@ async function loadArchived() {
 
 function showTab(tab) {
   document.getElementById("dashboard-view").classList.toggle("hidden", tab !== "dashboard");
+  document.getElementById("tracking-view").classList.toggle("hidden", tab !== "tracking");
   document.getElementById("archived-view").classList.toggle("hidden", tab !== "archived");
   document.getElementById("tab-dashboard-btn").classList.toggle("active", tab === "dashboard");
+  document.getElementById("tab-tracking-btn").classList.toggle("active", tab === "tracking");
   document.getElementById("tab-archived-btn").classList.toggle("active", tab === "archived");
   if (tab === "archived") loadArchived();
+  if (tab === "tracking") loadTrackingTab();
+}
+
+const TRACKING_HORIZON_LABELS = ["J+1", "J+7", "J+30"];
+const STATUS_LABELS = { correct: "Correct", incorrect: "Incorrect", neutral: "Neutre", pending: "En attente", no_data: "Pas de donnée" };
+
+async function loadTrackingTab() {
+  const select = document.getElementById("tracking-ticker-select");
+  if (!select.dataset.populated) {
+    const res = await fetch("/api/assets");
+    const assets = (await res.json()).filter(a => a.is_active).sort((a, b) => a.ticker.localeCompare(b.ticker));
+    select.innerHTML = '<option value="">Tous les titres</option>' + assets.map(a => `<option value="${a.ticker}">${a.ticker}</option>`).join("");
+    select.dataset.populated = "1";
+  }
+  loadTracking(select.value || null);
+}
+
+function horizonCell(h) {
+  if (!h) return '<span class="status-badge status-no_data">—</span>';
+  const label = STATUS_LABELS[h.status] || h.status;
+  const pct = h.actual_return !== null && h.actual_return !== undefined
+    ? `<span class="status-return">${h.actual_return >= 0 ? "+" : ""}${(h.actual_return * 100).toFixed(1)}%</span>`
+    : "";
+  return `<span class="status-badge status-${h.status}">${label}</span>${pct}`;
+}
+
+function trackingRow(ticker, isFirstOfGroup, rowLabel, rec, isAggregate) {
+  const tr = document.createElement("tr");
+  tr.className = (isFirstOfGroup ? "ticker-group-start " : "") + (isAggregate ? "row-aggregate" : "");
+  const tickerCell = isFirstOfGroup ? `<td class="ticker-cell" rowspan="${isAggregate ? 1 : 4}">${ticker}</td>` : "";
+  if (!rec) {
+    tr.innerHTML = `${tickerCell}<td>${rowLabel}</td><td colspan="${2 + TRACKING_HORIZON_LABELS.length}" class="empty-note" style="padding:8px 12px;">Aucune prédiction</td>`;
+    return tr;
+  }
+  const horizonsCells = TRACKING_HORIZON_LABELS.map(l => `<td>${horizonCell(rec.horizons[l])}</td>`).join("");
+  tr.innerHTML = `
+    ${tickerCell}
+    <td>${rowLabel}</td>
+    <td>${rec.recommendation || "—"}</td>
+    <td>${rec.score !== null && rec.score !== undefined ? rec.score.toFixed(0) : "—"}</td>
+    ${horizonsCells}
+  `;
+  return tr;
+}
+
+async function loadTracking(ticker) {
+  const wrap = document.getElementById("tracking-table-wrap");
+  wrap.innerHTML = '<div class="empty-note">Chargement…</div>';
+
+  const url = ticker ? `/api/predictions/tracking?ticker=${encodeURIComponent(ticker)}` : "/api/predictions/tracking";
+  const res = await fetch(url);
+  const rows = await res.json();
+
+  if (rows.length === 0) {
+    wrap.innerHTML = '<div class="empty-note">Aucune prédiction stockée pour ce titre.</div>';
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "tracking-table";
+  table.innerHTML = `
+    <thead><tr><th>Titre</th><th>Source</th><th>Reco</th><th>Score</th>${TRACKING_HORIZON_LABELS.map(l => `<th>${l}</th>`).join("")}</tr></thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+
+  const providerOrder = ["deepseek", "gemini", "claude"];
+  rows.forEach(entry => {
+    const byProvider = Object.fromEntries(entry.providers.map(p => [p.provider, p]));
+    let first = true;
+    providerOrder.forEach(p => {
+      tbody.appendChild(trackingRow(entry.ticker, first, p, byProvider[p], false));
+      first = false;
+    });
+    tbody.appendChild(trackingRow(entry.ticker, false, "Agrégat", entry.aggregate, true));
+  });
+
+  wrap.innerHTML = "";
+  wrap.appendChild(table);
 }
 
 function populateSectorSelect(sectors) {
@@ -664,7 +804,12 @@ function renderDetail(data) {
     </div>
     <div class="chart-section">
       <h3>Analyse Probastock</h3>
-      <div class="analysis-box">Analyse IA pas encore disponible pour cet actif — sera activée une fois le moteur d'analyse construit.</div>
+      <div id="analysis-box">
+        <div class="analysis-placeholder">
+          <span>Aucune analyse IA pour l'instant.</span>
+          <button class="btn-primary" onclick="runAnalysis('${data.ticker}')">Analyser maintenant (DeepSeek)</button>
+        </div>
+      </div>
     </div>
   `;
 
@@ -741,6 +886,65 @@ function renderDetail(data) {
       plugins: { legend: { display: false } },
     },
   });
+}
+
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function renderAnalysisResult(data) {
+  const a = data.analysis;
+  const dirClass = a.direction === "bullish" ? "return-up" : a.direction === "bearish" ? "return-down" : "return-flat";
+  const list = (items) => (items && items.length)
+    ? `<ul>${items.map(i => `<li>${esc(i)}</li>`).join("")}</ul>`
+    : "<span>—</span>";
+
+  return `
+    <div class="analysis-result">
+      <div class="analysis-header">
+        <span class="return-badge ${dirClass}">${a.direction.toUpperCase()}</span>
+        <span>Score : <b>${a.score}/100</b></span>
+        <span>Probabilité 20j : <b>${(a.probability_20d * 100).toFixed(0)}%</b></span>
+        <span>Confiance : <b>${(a.confidence * 100).toFixed(0)}%</b></span>
+        <span>Risque : <b>${(a.risk * 100).toFixed(0)}%</b></span>
+      </div>
+      <div class="analysis-grid">
+        <div><h4>Facteurs positifs</h4>${list(a.key_positive_factors)}</div>
+        <div><h4>Facteurs négatifs</h4>${list(a.key_negative_factors)}</div>
+        <div><h4>Catalyseurs</h4>${list(a.catalysts)}</div>
+        <div><h4>Signaux d'alerte</h4>${list(a.red_flags)}</div>
+      </div>
+      <div class="analysis-meta">${esc(data.provider)} (${esc(data.model)}) — ${data.tokens_input}+${data.tokens_output} tokens</div>
+      <button class="btn-secondary" onclick="runAnalysis('${data.ticker}')">Relancer l'analyse</button>
+    </div>
+  `;
+}
+
+async function runAnalysis(ticker) {
+  const box = document.getElementById("analysis-box");
+  box.innerHTML = '<div class="analysis-loading">Analyse DeepSeek en cours… (quelques secondes)</div>';
+
+  let res, data;
+  try {
+    res = await fetch(`/api/assets/${encodeURIComponent(ticker)}/analyze`, { method: "POST" });
+    data = await res.json();
+  } catch (e) {
+    box.innerHTML = `<div class="analysis-error"><span>Erreur réseau : ${esc(String(e))}</span><button class="btn-secondary" onclick="runAnalysis('${ticker}')">Réessayer</button></div>`;
+    return;
+  }
+
+  if (!res.ok) {
+    box.innerHTML = `<div class="analysis-error"><span>Erreur : ${esc(data.detail || res.statusText)}</span><button class="btn-secondary" onclick="runAnalysis('${ticker}')">Réessayer</button></div>`;
+    return;
+  }
+  if (!data.ok) {
+    box.innerHTML = `<div class="analysis-error"><span>Échec de l'analyse : ${esc(data.error || "raison inconnue")}</span><button class="btn-secondary" onclick="runAnalysis('${ticker}')">Réessayer</button></div>`;
+    return;
+  }
+
+  box.innerHTML = renderAnalysisResult(data);
 }
 
 loadDashboard();

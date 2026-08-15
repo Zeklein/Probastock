@@ -7,3 +7,4 @@ yfinance==0.2.65
 pandas==3.0.3
 requests==2.33.1
 truststore==0.10.4
+anthropic==0.122.0

@@ -145,11 +145,23 @@ CREATE TABLE predictions (
     benchmark               TEXT        NOT NULL,                -- ex: "SP500", "CAC40" — référence de surperformance
     outperform_probability  NUMERIC(5, 4) NOT NULL               -- probabilité entre 0.0000 et 1.0000
                             CHECK (outperform_probability BETWEEN 0 AND 1),
-    expected_return         NUMERIC(8, 5) NOT NULL,              -- rendement prédit sur l'horizon (ex: 0.03500 = +3.5%)
+    expected_return         NUMERIC(8, 5),                       -- rendement prédit sur l'horizon (ex: 0.03500 = +3.5%) ; NULL pour un pipeline qualitatif qui ne produit pas ce chiffre
     conviction_score        NUMERIC(4, 3) NOT NULL               -- score interne de confiance, entre 0 et 1
                             CHECK (conviction_score BETWEEN 0 AND 1),
     model_version           TEXT        NOT NULL,                -- dupliqué depuis model_runs pour faciliter les requêtes
     features_snapshot       JSONB,                               -- optionnel : valeurs des features utilisées (pour audit)
+
+    -- Sortie qualitative des moteurs d'analyse IA (DeepSeek, puis Gemini/Claude)
+    direction               TEXT
+                            CHECK (direction IN ('bullish', 'neutral', 'bearish')),
+    recommendation           TEXT                                 -- champ decisionnel principal, plus actionnable que direction
+                            CHECK (recommendation IN ('BUY', 'HOLD', 'REDUCE', 'SELL')),
+    score                   NUMERIC(5, 2)                        -- score global 0-100, distinct de conviction_score (0-1)
+                            CHECK (score BETWEEN 0 AND 100),
+    risk_score              NUMERIC(4, 3)                        -- niveau de risque perçu, entre 0 et 1
+                            CHECK (risk_score BETWEEN 0 AND 1),
+    analysis_factors        JSONB,                               -- {key_positive_factors, key_negative_factors, catalysts, red_flags}
+    horizons                JSONB,                               -- {probability_1d, probability_5d, probability_60d} ; probability_20d reste au niveau racine
 
     -- Résultat réel, rempli après target_date
     actual_close_at_target  NUMERIC(12, 4),                      -- prix de clôture constaté à target_date
@@ -209,3 +221,37 @@ COMMENT ON COLUMN features_daily.computed_at IS 'Horodatage du (re)calcul, mis �
 
 CREATE UNIQUE INDEX idx_features_unique     ON features_daily(asset_id, trade_date, feature_version);
 CREATE INDEX idx_features_asset_date        ON features_daily(asset_id, trade_date DESC);
+
+
+-- -----------------------------------------------------------------------------
+-- Table : predictions_aggregated
+-- Score Probastock : moyenne des 3 providers (DeepSeek/Gemini/Claude) pour un
+-- meme (asset, prediction_date). Une ligne par jour et par actif, recalculee
+-- (UPSERT) si les 3 providers sont relances le meme jour -- a la difference de
+-- predictions qui reste un ledger immuable par provider.
+-- -----------------------------------------------------------------------------
+CREATE TABLE predictions_aggregated (
+    id                       BIGSERIAL PRIMARY KEY,
+    asset_id                 INTEGER     NOT NULL REFERENCES assets(id),
+    prediction_date          DATE        NOT NULL,
+
+    score_agrege             NUMERIC(5, 2)  CHECK (score_agrege BETWEEN 0 AND 100),
+    probability_20d_agregee  NUMERIC(5, 4)  CHECK (probability_20d_agregee BETWEEN 0 AND 1),
+    confidence_agregee       NUMERIC(4, 3)  CHECK (confidence_agregee BETWEEN 0 AND 1),
+    risk_agrege              NUMERIC(4, 3)  CHECK (risk_agrege BETWEEN 0 AND 1),
+    horizons_agreges         JSONB,                  -- {probability_1d, probability_5d, probability_20d, probability_60d}, moyenne par horizon
+
+    -- Conviction = mesure inverse de la dispersion entre les 3 scores providers,
+    -- distinct de predictions.conviction_score (qui est la confidence auto-declaree
+    -- d'un seul provider). Formule dans app/aggregation.py.
+    conviction               NUMERIC(4, 3)  CHECK (conviction BETWEEN 0 AND 1),
+
+    recommendation_finale    TEXT        CHECK (recommendation_finale IN ('BUY', 'HOLD', 'REDUCE', 'SELL')),
+    provider_count           INTEGER     NOT NULL,     -- combien des 3 providers ont contribue (1 a 3)
+    source_prediction_ids    BIGINT[]    NOT NULL,      -- predictions.id agregees, pour audit
+    computed_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE predictions_aggregated IS 'Score Probastock agrege (moyenne des 3 providers) par actif et par jour.';
+
+CREATE UNIQUE INDEX idx_pred_agg_unique ON predictions_aggregated(asset_id, prediction_date);

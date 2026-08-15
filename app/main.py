@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -8,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from app.db import engine
+from app.fiche_enrichment import NOT_COVERED, RECOMMENDATION_SCALE_NOTE, fetch_analyst_enrichment
 
 app = FastAPI(title="Probastock", version="0.1.0")
 
@@ -248,7 +250,27 @@ def asset_detail(ticker: str):
     }
 
 
-NEWS_PLACEHOLDER = "(collecte de news pas encore implementee)"
+NEWS_PLACEHOLDER = "(aucune news collectee sur cette periode)"
+NEWS_7D_LIMIT = 8    # plafond d'items dans le prompt : certains tickers ont 40-50 news/7j, il faut borner le cout/latence
+NEWS_30D_LIMIT = 10  # items 8-30j, hors ceux deja lists dans la section 7j
+
+FICHE_NEWS_SQL = text(
+    """
+    SELECT title, summary, published_at, sentiment_score
+    FROM news_items
+    WHERE asset_id = :asset_id AND published_at >= :since
+    ORDER BY published_at DESC
+    """
+)
+
+
+def _fmt_news_line(item, with_summary=False):
+    date_str = item["published_at"].strftime("%Y-%m-%d")
+    sentiment = f" (sentiment {item['sentiment_score']:+.2f})" if item["sentiment_score"] is not None else ""
+    line = f"- [{date_str}] {item['title']}{sentiment}"
+    if with_summary and item["summary"]:
+        line += f"\n  {item['summary'][:200]}"
+    return line
 
 # Derniere ligne de features_daily par actif, jointe a assets pour recuperer
 # le secteur et le statut : sert a la fois a la fiche de l'actif demande et
@@ -276,6 +298,62 @@ FICHE_LATEST_PRICE_SQL = text(
     ORDER BY asset_id, trade_date DESC, fetched_at DESC
     """
 )
+
+# Historique complet (high/low), le plus recent d'abord, meme regle de dedup.
+# Sert aux plages de prix (1j/1sem/1mois/1an) et au target technique maison.
+FICHE_PRICE_RANGE_HISTORY_SQL = text(
+    """
+    SELECT DISTINCT ON (trade_date) trade_date, high, low
+    FROM price_snapshots
+    WHERE asset_id = :asset_id
+    ORDER BY trade_date DESC, fetched_at DESC
+    """
+)
+
+PRICE_RANGE_WINDOWS = {"1j": 1, "1sem": 5, "1mois": 21, "1an": 252}
+TECHNICAL_TARGET_SESSIONS = 60  # ~1 trimestre boursier ; distinct des fenetres 20j deja couvertes par sma_20/volatility_20d
+
+
+def _price_ranges(prices_desc):
+    """prices_desc : lignes {trade_date, high, low} triees du plus recent au
+    plus ancien. Renvoie None par fenetre si aucun historique disponible."""
+    ranges = {}
+    for label, n in PRICE_RANGE_WINDOWS.items():
+        window = [p for p in prices_desc[:n] if p["high"] is not None and p["low"] is not None]
+        if not window:
+            ranges[label] = None
+            continue
+        ranges[label] = {
+            "high": max(p["high"] for p in window),
+            "low": min(p["low"] for p in window),
+            "n_seances": len(window),
+        }
+    return ranges
+
+
+def _technical_target(prices_desc, volatility_20d):
+    """Target technique maison (pas un modele predictif) : plus haut/bas sur
+    les N dernieres seances, elargi de +/- volatility_20d pour donner une
+    fourchette proportionnee a la volatilite recente du titre plutot qu'un
+    chiffre fixe. A comparer avec targets_analystes, pas a la place."""
+    window = [
+        p for p in prices_desc[:TECHNICAL_TARGET_SESSIONS]
+        if p["high"] is not None and p["low"] is not None
+    ]
+    if not window:
+        return None
+
+    high_n = max(float(p["high"]) for p in window)
+    low_n = min(float(p["low"]) for p in window)
+    vol = float(volatility_20d) if volatility_20d is not None else 0.0
+
+    return {
+        "high": round(high_n * (1 + vol), 4),
+        "low": round(low_n * (1 - vol), 4),
+        "n_seances_visees": TECHNICAL_TARGET_SESSIONS,
+        "n_seances_disponibles": len(window),
+        "methode": "plus haut/bas glissant, elargi de +/- volatility_20d",
+    }
 
 
 def _rsi_zone(rsi):
@@ -320,6 +398,17 @@ def asset_fiche(ticker: str):
 
         price = conn.execute(FICHE_LATEST_PRICE_SQL, {"asset_id": asset["id"]}).mappings().first()
         all_features = conn.execute(FICHE_LATEST_FEATURES_SQL).mappings().all()
+        price_history_desc = conn.execute(
+            FICHE_PRICE_RANGE_HISTORY_SQL, {"asset_id": asset["id"]}
+        ).mappings().all()
+        news_30d = conn.execute(
+            FICHE_NEWS_SQL,
+            {"asset_id": asset["id"], "since": datetime.now(timezone.utc) - timedelta(days=30)},
+        ).mappings().all()
+
+    since_7d = datetime.now(timezone.utc) - timedelta(days=7)
+    news_7d = [n for n in news_30d if n["published_at"] >= since_7d][:NEWS_7D_LIMIT]
+    news_older = [n for n in news_30d if n["published_at"] < since_7d][:NEWS_30D_LIMIT]
 
     features_by_ticker = {r["ticker"]: r for r in all_features}
     own = features_by_ticker.get(asset["ticker"])
@@ -338,6 +427,50 @@ def asset_fiche(ticker: str):
     rsi = own["rsi_14"] if own else None
     sma_20 = own["sma_20"] if own else None
     sma_50 = own["sma_50"] if own else None
+    volatility_20d = own["volatility_20d"] if own else None
+
+    price_ranges = _price_ranges(price_history_desc)
+    technical_target = _technical_target(price_history_desc, volatility_20d)
+
+    try:
+        enrichment = fetch_analyst_enrichment(asset["ticker"], float(close) if close is not None else None)
+    except Exception:
+        # /fiche reste utilisable meme si yfinance est indisponible : degrade
+        # en "non couvert" plutot que de casser l'endpoint.
+        enrichment = {
+            "valorisation": {"per_annee_courante": None, "per_annee_courante_label": NOT_COVERED, "per_y1": None, "per_y1_label": NOT_COVERED},
+            "consensus_analystes": {"recommendation_key": None, "recommendation_mean": None, "note_sur_10": None, "note_formule": RECOMMENDATION_SCALE_NOTE, "nb_analystes": None, "label_absence": NOT_COVERED},
+            "targets_analystes": {"mean": None, "high": None, "low": None, "label_absence": NOT_COVERED},
+            "eps_trend": None,
+        }
+
+    def _fmt_range(r):
+        return f"{_fmt_num(r['high'])} / {_fmt_num(r['low'])} ({r['n_seances']} séances)" if r else "N/A"
+
+    def _fmt_per(value, label):
+        return label if label else _fmt_num(value)
+
+    def _fmt_technical_target(t):
+        if t is None:
+            return "N/A"
+        return f"{_fmt_num(t['high'])} / {_fmt_num(t['low'])} ({t['n_seances_disponibles']}/{t['n_seances_visees']} séances, {t['methode']})"
+
+    def _fmt_analyst_target(t):
+        if t["label_absence"]:
+            return t["label_absence"]
+        return f"moyenne {_fmt_num(t['mean'])} / haut {_fmt_num(t['high'])} / bas {_fmt_num(t['low'])}"
+
+    news_7d_text = "\n".join(_fmt_news_line(n, with_summary=True) for n in news_7d) if news_7d else NEWS_PLACEHOLDER
+    news_older_text = "\n".join(_fmt_news_line(n) for n in news_older) if news_older else NEWS_PLACEHOLDER
+
+    eps_trend = enrichment["eps_trend"]
+    if eps_trend:
+        eps_trend_lines = "\n".join(
+            f"  {period} : actuel {_fmt_num(v.get('current'), 3)} (il y a 90j : {_fmt_num(v.get('90daysAgo'), 3)})"
+            for period, v in eps_trend.items()
+        )
+    else:
+        eps_trend_lines = f"  {NOT_COVERED}"
 
     text_block = f"""ACTION : {asset['ticker']} — {asset['name']}
 SECTEUR : {asset['sector'] or 'N/A'}
@@ -354,11 +487,31 @@ Position vs SMA-20 : {_vs_sma(close, sma_20)}
 Position vs SMA-50 : {_vs_sma(close, sma_50)}
 Ratio volume du jour / volume moyen 20j : {_fmt_num(own['volume_ratio'] if own else None)}
 
-NEWS DES 7 DERNIERS JOURS
-{NEWS_PLACEHOLDER}
+PLAGES DE PRIX (haut / bas)
+1 jour : {_fmt_range(price_ranges['1j'])}
+1 semaine : {_fmt_range(price_ranges['1sem'])}
+1 mois : {_fmt_range(price_ranges['1mois'])}
+1 an : {_fmt_range(price_ranges['1an'])}
 
-NEWS DES 30 DERNIERS JOURS
-{NEWS_PLACEHOLDER}
+VALORISATION
+PER année courante : {_fmt_per(enrichment['valorisation']['per_annee_courante'], enrichment['valorisation']['per_annee_courante_label'])}
+PER Y+1 (estimation) : {_fmt_per(enrichment['valorisation']['per_y1'], enrichment['valorisation']['per_y1_label'])}
+
+CONSENSUS ANALYSTES
+{enrichment['consensus_analystes']['label_absence'] or f"{enrichment['consensus_analystes']['recommendation_key']} -- note {enrichment['consensus_analystes']['note_sur_10']}/10 ({enrichment['consensus_analystes']['nb_analystes']} analystes)"}
+
+TARGETS
+Target analystes : {_fmt_analyst_target(enrichment['targets_analystes'])}
+Target technique Probastock : {_fmt_technical_target(technical_target)}
+
+RÉVISIONS D'ESTIMATIONS EPS (vs il y a 90 jours)
+{eps_trend_lines}
+
+NEWS DES 7 DERNIERS JOURS
+{news_7d_text}
+
+NEWS DES 8-30 DERNIERS JOURS (titres seulement)
+{news_older_text}
 
 CONTEXTE SECTORIEL
 Performance moyenne du secteur {asset['sector'] or 'N/A'} sur 20j : {_fmt_pct(sector_avg_return_20d)}
@@ -386,5 +539,44 @@ Performance SPY sur la même période (20j) : {_fmt_pct(spy_return_20d)}
         "volume_ratio": own["volume_ratio"] if own else None,
         "sector_avg_return_20d": sector_avg_return_20d,
         "benchmark_return_20d": spy_return_20d,
+        "price_ranges": price_ranges,
+        "valorisation": enrichment["valorisation"],
+        "consensus_analystes": enrichment["consensus_analystes"],
+        "targets": {
+            "analystes": enrichment["targets_analystes"],
+            "technique_probastock": technical_target,
+        },
+        "eps_trend": enrichment["eps_trend"],
+        "news": {
+            "last_7d": [
+                {"title": n["title"], "summary": n["summary"], "published_at": n["published_at"], "sentiment_score": n["sentiment_score"]}
+                for n in news_7d
+            ],
+            "last_8_30d": [
+                {"title": n["title"], "published_at": n["published_at"], "sentiment_score": n["sentiment_score"]}
+                for n in news_older
+            ],
+        },
         "text": text_block,
     }
+
+
+@app.post("/api/assets/{ticker}/analyze")
+def analyze_asset(ticker: str):
+    # Import differe : app.ai_engine importe asset_fiche depuis ce module,
+    # un import en tete de fichier creerait un cycle au chargement.
+    from app.ai_engine import analyze_ticker
+
+    try:
+        return analyze_ticker(ticker, provider="deepseek")
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/api/predictions/tracking")
+def predictions_tracking(ticker: str | None = None):
+    from app.tracking import compute_tracking
+
+    return compute_tracking(ticker)

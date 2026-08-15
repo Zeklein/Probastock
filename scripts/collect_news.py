@@ -16,7 +16,9 @@ Si un meme article couvre deux de nos tickers (ex: AMD et MU dans le meme
 papier), il ne sera rattache qu'au premier actif qui l'a rapporte -- ce script
 ne corrige pas cette contrainte, deja presente avant cette tache.
 
-Usage: python scripts/collect_news.py
+Usage:
+  python scripts/collect_news.py                    # tous les actifs actifs (ordre alphabetique, jusqu'au quota)
+  python scripts/collect_news.py TICKER1 TICKER2 ... # seulement ces tickers-la (ex: pour combler des trous cibles)
 """
 import os
 import sys
@@ -90,10 +92,18 @@ def main():
     run_collected_at = datetime.now(timezone.utc)
     time_from = (run_collected_at - timedelta(days=DAYS_BACK)).strftime("%Y%m%dT%H%M")
 
+    requested_tickers = sys.argv[1:]
+
     with engine.connect() as conn:
-        assets = conn.execute(
-            text("SELECT id, ticker FROM assets WHERE is_active = true ORDER BY ticker")
-        ).fetchall()
+        if requested_tickers:
+            assets = conn.execute(
+                text("SELECT id, ticker FROM assets WHERE is_active = true AND ticker = ANY(:tickers) ORDER BY ticker"),
+                {"tickers": requested_tickers},
+            ).fetchall()
+        else:
+            assets = conn.execute(
+                text("SELECT id, ticker FROM assets WHERE is_active = true ORDER BY ticker")
+            ).fetchall()
 
     to_process = assets[:MAX_REQUESTS_PER_RUN]
     skipped_quota = list(assets[MAX_REQUESTS_PER_RUN:])

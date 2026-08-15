@@ -1,0 +1,52 @@
+name: Batch quotidien d'analyse IA (score Probastock)
+
+on:
+  schedule:
+    # 22:00 UTC, du lundi au vendredi : 30 min apres la collecte des cours
+    # (21:30 UTC, cf. collect_prices.yml), et en dehors des heures pleines
+    # DeepSeek (01h-04h et 06h-10h UTC) -- cf. justification dans le rapport.
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  ai-engine-batch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: pip install -r requirements.txt
+
+      # Les indicateurs techniques (RSI/SMA/volatilite) consommes par /fiche
+      # ne sont pas recalcules par collect_prices.yml -- sans cette etape,
+      # le batch IA analyserait avec des indicateurs perimes. UPSERT sur
+      # (asset_id, trade_date, feature_version), donc sans risque a rejouer.
+      - run: python scripts/compute_features.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # analyze_ticker() gere deja les echecs par (ticker, provider) sans
+      # jamais lever d'exception (cf. run_ai_engine_batch_all_providers.py) --
+      # cette etape ne duplique donc aucune gestion d'erreur, elle capture
+      # juste la sortie pour le resume lisible ci-dessous.
+      - run: python scripts/run_ai_engine_batch_all_providers.py | tee batch_output.log
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Résumé lisible dans l'onglet Summary de GitHub Actions
+        if: always()
+        run: |
+          echo "## Batch IA — résultats" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat batch_output.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # Fait echouer le job (donc notifie par email/UI GitHub Actions) si le
+      # run est significativement en echec -- seuils documentes dans le script.
+      - run: python scripts/check_batch_results.py
