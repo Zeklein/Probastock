@@ -27,7 +27,41 @@ class AssetIn(BaseModel):
     sector: str | None = None
     type: str  # "action" ou "ETF"
 
-ASSETS_SQL = text("SELECT id, ticker, name, sector FROM assets WHERE is_active = true ORDER BY ticker")
+ASSETS_SQL = text("SELECT id, ticker, name, sector, is_favorite FROM assets WHERE is_active = true ORDER BY ticker")
+
+# Zone geographique : pas de colonne dediee, derivee du suffixe de ticker (place
+# boursiere) plutot que d'ajouter une colonne a maintenir a la main pour ~1
+# exception aujourd'hui (FTC.L). Nouveau suffixe -> ajouter une entree ici,
+# aucune migration necessaire. Absence de suffixe = valeur par defaut "US".
+GEO_ZONE_BY_SUFFIX = {
+    "L": "Royaume-Uni",
+    "PA": "France",
+    "DE": "Allemagne",
+    "KS": "Corée du Sud",
+    "T": "Japon",
+    "HK": "Hong Kong",
+}
+GEO_ZONE_DEFAULT = "US"
+
+
+def _geo_zone(ticker: str) -> str:
+    if "." in ticker:
+        suffix = ticker.rsplit(".", 1)[1].upper()
+        if suffix in GEO_ZONE_BY_SUFFIX:
+            return GEO_ZONE_BY_SUFFIX[suffix]
+    return GEO_ZONE_DEFAULT
+
+
+# Dernier score agrege par actif (une ligne par jour au plus grace a l'index
+# unique de predictions_aggregated) -- optionnel : LEFT JOIN implicite via dict.get,
+# un actif sans agregation pour l'instant a simplement score_agrege=None.
+LATEST_AGGREGATED_SQL = text(
+    """
+    SELECT DISTINCT ON (asset_id) asset_id, score_agrege, recommendation_finale
+    FROM predictions_aggregated
+    ORDER BY asset_id, prediction_date DESC
+    """
+)
 
 # Une seule ligne par actif : le trigger unique (asset_id, trade_date, feature_version)
 # sur features_daily garantit qu'il n'y a pas de doublon a dedupliquer ici.
@@ -82,6 +116,9 @@ def dashboard():
         features_by_asset = {
             r["asset_id"]: r for r in conn.execute(LATEST_FEATURES_SQL).mappings().all()
         }
+        agg_by_asset = {
+            r["asset_id"]: r for r in conn.execute(LATEST_AGGREGATED_SQL).mappings().all()
+        }
         sparkline_by_asset = defaultdict(list)
         for r in conn.execute(SPARKLINE_SQL, {"sparkline_days": SPARKLINE_DAYS}).mappings().all():
             sparkline_by_asset[r["asset_id"]].append({"trade_date": r["trade_date"], "close": r["close"]})
@@ -95,6 +132,7 @@ def dashboard():
         close = sparkline[-1]["close"]
         trade_date = sparkline[-1]["trade_date"]
         features = features_by_asset.get(asset["id"], {})
+        agg = agg_by_asset.get(asset["id"], {})
         sma_20 = features.get("sma_20")
 
         trend = None
@@ -111,6 +149,10 @@ def dashboard():
                 "rsi_14": features.get("rsi_14"),
                 "trend": trend,
                 "sparkline": sparkline,
+                "is_favorite": asset["is_favorite"],
+                "geo_zone": _geo_zone(asset["ticker"]),
+                "score_agrege": agg.get("score_agrege"),
+                "recommendation_finale": agg.get("recommendation_finale"),
             }
         )
 
@@ -192,6 +234,25 @@ def archive_asset(ticker: str):
 @app.patch("/api/assets/{ticker}/reactivate")
 def reactivate_asset(ticker: str):
     return _set_active(ticker, True)
+
+
+@app.patch("/api/assets/{ticker}/favorite")
+def toggle_favorite(ticker: str):
+    """Bascule is_favorite. Affichage/tri dashboard uniquement -- ne touche a
+    rien du pipeline d'analyse automatise (aucun script/workflow ne lit ce champ)."""
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                """
+                UPDATE assets SET is_favorite = NOT is_favorite WHERE ticker = :ticker
+                RETURNING ticker, is_favorite
+                """
+            ),
+            {"ticker": ticker},
+        ).mappings().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Ticker {ticker} introuvable.")
+    return row
 
 
 DETAIL_INDICATORS_DAYS = 90

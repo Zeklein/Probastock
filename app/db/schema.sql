@@ -20,6 +20,7 @@ CREATE TABLE assets (
     sector      TEXT,                            -- ex: "Technology", NULL ok pour les ETF
     notes       TEXT,                            -- particularité: ETF, ADR, place boursière étrangère, etc.
     is_active   BOOLEAN NOT NULL DEFAULT true,   -- false = on arrête de suivre cet actif
+    is_favorite BOOLEAN NOT NULL DEFAULT false,  -- affichage/tri dashboard uniquement, aucun impact sur le pipeline automatisé
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -89,11 +90,12 @@ CREATE TABLE news_items (
     asset_id        INTEGER     NOT NULL REFERENCES assets(id),
     published_at    TIMESTAMPTZ NOT NULL,         -- date de publication réelle
     collected_at    TIMESTAMPTZ NOT NULL DEFAULT now(), -- date de notre collecte
-    source          TEXT        NOT NULL,         -- ex: "reuters", "seeking_alpha"
-    url             TEXT        NOT NULL UNIQUE,  -- clé naturelle anti-doublon
+    source          TEXT        NOT NULL,         -- media/éditeur, ex: "reuters", "seeking_alpha" (PAS l'API utilisée)
+    provider        TEXT        NOT NULL,         -- API qui a fourni la ligne : 'alphavantage' / 'finnhub' / 'marketaux'
+    url             TEXT        NOT NULL UNIQUE,  -- clé naturelle anti-doublon (par provider : une même actu peut réapparaître sous 2 URLs différentes, cf. dédup applicative par similarité de titre)
     title           TEXT        NOT NULL,
     summary         TEXT,                         -- extrait ou résumé généré
-    sentiment_score NUMERIC(4, 3)                 -- optionnel, entre -1.000 et 1.000
+    sentiment_score NUMERIC(4, 3)                 -- optionnel, entre -1.000 et 1.000 ; NULL si le provider n'en fournit pas (ex: Finnhub)
                     CHECK (sentiment_score BETWEEN -1 AND 1)
 );
 

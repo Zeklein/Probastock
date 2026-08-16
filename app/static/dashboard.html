@@ -20,6 +20,15 @@
     --sector-energie: #059669;
     --sector-telecoms: #0891b2;
     --sector-benchmark: #64748b;
+    /* Fonds pastel par secteur (memes teintes que --sector-*, tres eclaircies) --
+       contraste verifie avec --text (#1a2233) : toutes >10:1, largement AA. */
+    --sector-espace-bg: #dbeafe;
+    --sector-defense-bg: #e7e5e4;
+    --sector-tech-bg: #ede9fe;
+    --sector-materiaux-bg: #fef3c7;
+    --sector-energie-bg: #d1fae5;
+    --sector-telecoms-bg: #cffafe;
+    --sector-benchmark-bg: #f1f5f9;
   }
 
   * { box-sizing: border-box; }
@@ -117,6 +126,19 @@
     justify-content: space-between;
     align-items: flex-start;
   }
+
+  .ticker-row { display: flex; align-items: center; gap: 4px; }
+
+  .star-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0;
+    color: var(--text-muted);
+  }
+  .star-btn.active { color: #d97706; }
 
   .ticker { font-weight: 700; font-size: 15px; }
   .name {
@@ -257,6 +279,27 @@
   .tracking-filters { margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
   .tracking-filters select { padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
 
+  .dashboard-toolbar {
+    margin-bottom: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+  }
+  .dashboard-toolbar select {
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .dashboard-toolbar label { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
+  .fav-filter-label { color: var(--text) !important; cursor: pointer; }
+
   table.tracking-table { width: 100%; border-collapse: collapse; background: var(--card-bg); border-radius: 8px; overflow: hidden; font-size: 13px; }
   table.tracking-table th, table.tracking-table td {
     text-align: left;
@@ -383,7 +426,23 @@
 </header>
 
 <main>
-  <div id="dashboard-view"><div class="empty-note">Chargement…</div></div>
+  <div id="dashboard-view">
+    <div class="dashboard-toolbar">
+      <label class="fav-filter-label"><input type="checkbox" id="filter-favorites"> ★ Favoris uniquement</label>
+      <label>Secteur : <select id="filter-sector"><option value="">Tous</option></select></label>
+      <label>Zone : <select id="filter-zone"><option value="">Toutes</option></select></label>
+      <label>Trier par :
+        <select id="sort-select">
+          <option value="sector">Secteur</option>
+          <option value="alpha">Alphabétique</option>
+          <option value="score">Score Probastock</option>
+          <option value="variation">Variation du jour</option>
+          <option value="zone">Zone géographique</option>
+        </select>
+      </label>
+    </div>
+    <div id="dashboard-cards"><div class="empty-note">Chargement…</div></div>
+  </div>
   <div id="tracking-view" class="hidden">
     <div class="tracking-filters">
       <label for="tracking-ticker-select">Titre :</label>
@@ -457,6 +516,11 @@ function sectorColor(sector) {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
 }
 
+function sectorPastelBg(sector) {
+  const varName = (SECTOR_COLOR_VARS[sector] || "--sector-benchmark") + "-bg";
+  return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+}
+
 // Au-dela de ce nombre de jours calendaires, une cloture n'est plus "juste le
 // week-end" (jusqu'a 3 jours entre vendredi et lundi) mais probablement le
 // signe d'une collecte en panne -- affichage en rouge plutot que discret.
@@ -481,9 +545,10 @@ function fmtReturn(r) {
   return { text: `${pct}%`, cls: "return-flat" };
 }
 
-function buildCard(sector, asset) {
+function buildCard(asset) {
   const card = document.createElement("div");
   card.className = "card";
+  card.style.background = sectorPastelBg(asset.sector);
 
   const ret = fmtReturn(asset.return_1d);
   const close = asset.close !== null && asset.close !== undefined ? asset.close.toFixed(2) : "N/A";
@@ -494,7 +559,10 @@ function buildCard(sector, asset) {
   card.innerHTML = `
     <div class="card-top">
       <div>
-        <div class="ticker">${asset.ticker}</div>
+        <div class="ticker-row">
+          <button class="star-btn${asset.is_favorite ? " active" : ""}" title="Favori">${asset.is_favorite ? "★" : "☆"}</button>
+          <span class="ticker">${asset.ticker}</span>
+        </div>
         <div class="name" title="${asset.name}">${asset.name}</div>
       </div>
       <button class="archive-btn" title="Archiver">Archiver</button>
@@ -517,6 +585,21 @@ function buildCard(sector, asset) {
   card.querySelector(".archive-btn").addEventListener("click", (e) => {
     e.stopPropagation();
     archiveTicker(asset.ticker, card);
+  });
+  card.querySelector(".star-btn").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    const res = await fetch(`/api/assets/${encodeURIComponent(asset.ticker)}/favorite`, { method: "PATCH" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`Erreur : ${err.detail || res.statusText}`);
+      return;
+    }
+    const data = await res.json();
+    asset.is_favorite = data.is_favorite; // met a jour le cache dashboardAssets (meme objet reference)
+    btn.textContent = data.is_favorite ? "★" : "☆";
+    btn.classList.toggle("active", data.is_favorite);
+    if (filterState.favoritesOnly && !data.is_favorite) renderDashboard(); // retire la carte si le filtre favoris est actif
   });
 
   requestAnimationFrame(() => {
@@ -550,48 +633,131 @@ function buildCard(sector, asset) {
   return card;
 }
 
+const SECTOR_ORDER = ["Espace", "Défense", "Semi-conducteurs & Tech", "Matériaux stratégiques / Terres rares", "Énergie & Nucléaire", "Télécoms/Connectivité", "Benchmark"];
+
+let dashboardAssets = []; // cache client, evite un refetch a chaque filtre/tri
+const filterState = { favoritesOnly: false, sector: "", zone: "" };
+let sortMode = "sector";
+
 async function loadDashboard() {
   const res = await fetch("/api/dashboard");
   const data = await res.json();
 
+  // Le backend groupe par secteur ({secteur: [actifs]}) -- on aplatit en une
+  // liste unique avec le secteur porte par chaque actif, pour pouvoir filtrer/
+  // trier librement cote client sans redemander l'API a chaque changement.
+  dashboardAssets = Object.entries(data).flatMap(([sector, assets]) => assets.map(a => ({ ...a, sector })));
+
+  populateSectorSelect(Object.keys(data));
+  populateFilterSelects();
+  renderDashboard();
+}
+
+function populateFilterSelects() {
+  const sectorSelect = document.getElementById("filter-sector");
+  const sectors = SECTOR_ORDER.filter(s => dashboardAssets.some(a => a.sector === s))
+    .concat([...new Set(dashboardAssets.map(a => a.sector))].filter(s => !SECTOR_ORDER.includes(s)));
+  sectorSelect.innerHTML = '<option value="">Tous</option>' + sectors.map(s => `<option value="${s}">${s}</option>`).join("");
+
+  const zoneSelect = document.getElementById("filter-zone");
+  const zones = [...new Set(dashboardAssets.map(a => a.geo_zone))].sort();
+  zoneSelect.innerHTML = '<option value="">Toutes</option>' + zones.map(z => `<option value="${z}">${z}</option>`).join("");
+}
+
+function applyFiltersAndSort() {
+  const list = dashboardAssets.filter(a =>
+    (!filterState.favoritesOnly || a.is_favorite) &&
+    (!filterState.sector || a.sector === filterState.sector) &&
+    (!filterState.zone || a.geo_zone === filterState.zone)
+  );
+
+  if (sortMode === "alpha") {
+    return { flat: [...list].sort((a, b) => a.ticker.localeCompare(b.ticker)) };
+  }
+  if (sortMode === "score") {
+    return { flat: [...list].sort((a, b) => (b.score_agrege ?? -Infinity) - (a.score_agrege ?? -Infinity)) };
+  }
+  if (sortMode === "variation") {
+    return { flat: [...list].sort((a, b) => (b.return_1d ?? -Infinity) - (a.return_1d ?? -Infinity)) };
+  }
+
+  const groupKey = sortMode === "zone" ? "geo_zone" : "sector";
+  const groups = {};
+  list.forEach(a => { (groups[a[groupKey]] ??= []).push(a); });
+  Object.values(groups).forEach(g => g.sort((a, b) => a.ticker.localeCompare(b.ticker)));
+  return { groups, groupKey };
+}
+
+function renderDashboard() {
   Object.values(charts).forEach(c => c.destroy());
   for (const key in charts) delete charts[key];
 
-  const view = document.getElementById("dashboard-view");
+  const view = document.getElementById("dashboard-cards");
   view.innerHTML = "";
 
-  const sectorOrder = ["Espace", "Défense", "Semi-conducteurs & Tech", "Matériaux stratégiques / Terres rares", "Énergie & Nucléaire", "Télécoms/Connectivité", "Benchmark"];
-  const sectors = sectorOrder.filter(s => data[s] && data[s].length > 0)
-    .concat(Object.keys(data).filter(s => !sectorOrder.includes(s) && data[s].length > 0));
-
-  populateSectorSelect(Object.keys(data));
-
-  if (sectors.length === 0) {
+  if (dashboardAssets.length === 0) {
     view.innerHTML = '<div class="empty-note">Aucune donnée de cours disponible pour le moment.</div>';
     return;
   }
 
-  for (const sector of sectors) {
+  const { flat, groups, groupKey } = applyFiltersAndSort();
+
+  if ((flat && flat.length === 0) || (groups && Object.keys(groups).length === 0)) {
+    view.innerHTML = '<div class="empty-note">Aucun titre ne correspond aux filtres.</div>';
+    return;
+  }
+
+  if (flat) {
+    const grid = document.createElement("div");
+    grid.className = "cards-grid";
+    flat.forEach(asset => grid.appendChild(buildCard(asset)));
+    view.appendChild(grid);
+    return;
+  }
+
+  const keys = groupKey === "sector"
+    ? SECTOR_ORDER.filter(s => groups[s]).concat(Object.keys(groups).filter(s => !SECTOR_ORDER.includes(s)))
+    : Object.keys(groups).sort();
+
+  for (const key of keys) {
     const section = document.createElement("section");
     section.className = "sector-section";
-    section.style.setProperty("--sector-color", sectorColor(sector));
+    if (groupKey === "sector") section.style.setProperty("--sector-color", sectorColor(key));
 
     const h2 = document.createElement("h2");
-    h2.textContent = `${sector} (${data[sector].length})`;
+    h2.textContent = `${key} (${groups[key].length})`;
     section.appendChild(h2);
 
     const grid = document.createElement("div");
     grid.className = "cards-grid";
-    data[sector].forEach(asset => grid.appendChild(buildCard(sector, asset)));
+    groups[key].forEach(asset => grid.appendChild(buildCard(asset)));
     section.appendChild(grid);
 
     view.appendChild(section);
   }
 }
 
+document.getElementById("filter-favorites").addEventListener("change", (e) => {
+  filterState.favoritesOnly = e.target.checked;
+  renderDashboard();
+});
+document.getElementById("filter-sector").addEventListener("change", (e) => {
+  filterState.sector = e.target.value;
+  renderDashboard();
+});
+document.getElementById("filter-zone").addEventListener("change", (e) => {
+  filterState.zone = e.target.value;
+  renderDashboard();
+});
+document.getElementById("sort-select").addEventListener("change", (e) => {
+  sortMode = e.target.value;
+  renderDashboard();
+});
+
 async function archiveTicker(ticker, cardElement) {
   const res = await fetch(`/api/assets/${encodeURIComponent(ticker)}/archive`, { method: "PATCH" });
   if (res.ok) {
+    dashboardAssets = dashboardAssets.filter(a => a.ticker !== ticker); // sinon reapparait au prochain filtre/tri
     cardElement.remove();
   } else {
     const err = await res.json().catch(() => ({}));
