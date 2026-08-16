@@ -46,8 +46,8 @@ PAUSE_BETWEEN_REQUESTS_SECONDS = 13  # limite 5/minute -> >=12s entre requetes, 
 
 INSERT_SQL = text(
     """
-    INSERT INTO news_items (asset_id, published_at, collected_at, source, url, title, summary, sentiment_score)
-    VALUES (:asset_id, :published_at, :collected_at, :source, :url, :title, :summary, :sentiment_score)
+    INSERT INTO news_items (asset_id, published_at, collected_at, source, provider, url, title, summary, sentiment_score)
+    VALUES (:asset_id, :published_at, :collected_at, :source, 'alphavantage', :url, :title, :summary, :sentiment_score)
     ON CONFLICT (url) DO NOTHING
     """
 )
