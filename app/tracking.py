@@ -17,12 +17,17 @@ from datetime import date, timedelta
 
 from sqlalchemy import text
 
-from app.ai_engine import CLAUDE_MODEL, DEEPSEEK_MODEL, GEMINI_MODEL
+from app.ai_engine import CLAUDE_MODEL, DEEPSEEK_MODEL, GEMINI_MODEL, NEMOTRON_MODEL
 from app.db import engine
 
 TRACKING_HORIZONS = {"J+1": 1, "J+7": 7, "J+30": 30}  # jours calendaires depuis prediction_date
 
-PROVIDER_LABEL_BY_MODEL = {DEEPSEEK_MODEL: "deepseek", GEMINI_MODEL: "gemini", CLAUDE_MODEL: "claude"}
+PROVIDER_LABEL_BY_MODEL = {
+    DEEPSEEK_MODEL: "deepseek",
+    GEMINI_MODEL: "gemini",
+    CLAUDE_MODEL: "claude",
+    NEMOTRON_MODEL: "nemotron",
+}
 
 # Seuil de mouvement significatif (rendement reel, ex: 0.02 = 2%). En-dessous,
 # pour une reco directionnelle (BUY/REDUCE/SELL), le mouvement est trop faible

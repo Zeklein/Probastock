@@ -93,6 +93,7 @@ def dashboard():
             continue  # aucun cours collecte pour cet actif pour l'instant
 
         close = sparkline[-1]["close"]
+        trade_date = sparkline[-1]["trade_date"]
         features = features_by_asset.get(asset["id"], {})
         sma_20 = features.get("sma_20")
 
@@ -105,6 +106,7 @@ def dashboard():
                 "ticker": asset["ticker"],
                 "name": asset["name"],
                 "close": close,
+                "trade_date": trade_date,
                 "return_1d": features.get("return_1d"),
                 "rsi_14": features.get("rsi_14"),
                 "trend": trend,

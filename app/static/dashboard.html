@@ -143,10 +143,13 @@
     display: flex;
     align-items: baseline;
     gap: 8px;
-    margin-bottom: 8px;
+    margin-bottom: 2px;
   }
 
   .close-price { font-size: 20px; font-weight: 700; }
+
+  .price-date { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+  .price-date.stale { color: var(--red); font-weight: 600; }
 
   .return-badge {
     font-size: 12px;
@@ -454,6 +457,22 @@ function sectorColor(sector) {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
 }
 
+// Au-dela de ce nombre de jours calendaires, une cloture n'est plus "juste le
+// week-end" (jusqu'a 3 jours entre vendredi et lundi) mais probablement le
+// signe d'une collecte en panne -- affichage en rouge plutot que discret.
+const STALE_PRICE_DAYS = 4;
+
+function fmtTradeDate(tradeDate) {
+  if (!tradeDate) return { text: "", stale: false };
+  const d = new Date(tradeDate + "T00:00:00");
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = Math.round((today - d) / 86400000);
+  const label = d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+  const text = days === 0 ? `Clôture du jour (${label})` : `Clôture du ${label}`;
+  return { text, stale: days > STALE_PRICE_DAYS };
+}
+
 function fmtReturn(r) {
   if (r === null || r === undefined) return { text: "—", cls: "return-flat" };
   const pct = (r * 100).toFixed(2);
@@ -468,6 +487,7 @@ function buildCard(sector, asset) {
 
   const ret = fmtReturn(asset.return_1d);
   const close = asset.close !== null && asset.close !== undefined ? asset.close.toFixed(2) : "N/A";
+  const dateInfo = fmtTradeDate(asset.trade_date);
   const rsi = asset.rsi_14;
   const canvasId = `spark-${asset.ticker.replace(/[^a-zA-Z0-9]/g, "_")}`;
 
@@ -483,6 +503,7 @@ function buildCard(sector, asset) {
       <span class="close-price">${close}</span>
       <span class="return-badge ${ret.cls}">${ret.text}</span>
     </div>
+    <div class="price-date${dateInfo.stale ? " stale" : ""}">${dateInfo.text}</div>
     <div class="rsi-row">
       <div class="rsi-label"><span>RSI-14</span><span>${rsi !== null && rsi !== undefined ? rsi.toFixed(1) : "N/A"}</span></div>
       <div class="rsi-track">
@@ -662,10 +683,10 @@ function horizonCell(h) {
   return `<span class="status-badge status-${h.status}">${label}</span>${pct}`;
 }
 
-function trackingRow(ticker, isFirstOfGroup, rowLabel, rec, isAggregate) {
+function trackingRow(ticker, isFirstOfGroup, rowLabel, rec, isAggregate, groupSize) {
   const tr = document.createElement("tr");
   tr.className = (isFirstOfGroup ? "ticker-group-start " : "") + (isAggregate ? "row-aggregate" : "");
-  const tickerCell = isFirstOfGroup ? `<td class="ticker-cell" rowspan="${isAggregate ? 1 : 4}">${ticker}</td>` : "";
+  const tickerCell = isFirstOfGroup ? `<td class="ticker-cell" rowspan="${groupSize}">${ticker}</td>` : "";
   if (!rec) {
     tr.innerHTML = `${tickerCell}<td>${rowLabel}</td><td colspan="${2 + TRACKING_HORIZON_LABELS.length}" class="empty-note" style="padding:8px 12px;">Aucune prédiction</td>`;
     return tr;
@@ -702,15 +723,24 @@ async function loadTracking(ticker) {
   `;
   const tbody = table.querySelector("tbody");
 
-  const providerOrder = ["deepseek", "gemini", "claude"];
+  // Ordre d'affichage prefere pour les providers connus, mais n'importe quel
+  // provider present dans la reponse est affiche (fallback alphabetique) --
+  // pas besoin de toucher ce fichier pour qu'un nouveau provider apparaisse.
+  const PREFERRED_PROVIDER_ORDER = ["deepseek", "gemini", "claude", "nemotron"];
+  const allProviders = new Set();
+  rows.forEach(entry => entry.providers.forEach(p => allProviders.add(p.provider)));
+  const providerOrder = PREFERRED_PROVIDER_ORDER.filter(p => allProviders.has(p))
+    .concat([...allProviders].filter(p => !PREFERRED_PROVIDER_ORDER.includes(p)).sort());
+  const groupSize = providerOrder.length + 1; // + 1 ligne Agrégat
+
   rows.forEach(entry => {
     const byProvider = Object.fromEntries(entry.providers.map(p => [p.provider, p]));
     let first = true;
     providerOrder.forEach(p => {
-      tbody.appendChild(trackingRow(entry.ticker, first, p, byProvider[p], false));
+      tbody.appendChild(trackingRow(entry.ticker, first, p, byProvider[p], false, groupSize));
       first = false;
     });
-    tbody.appendChild(trackingRow(entry.ticker, false, "Agrégat", entry.aggregate, true));
+    tbody.appendChild(trackingRow(entry.ticker, false, "Agrégat", entry.aggregate, true, groupSize));
   });
 
   wrap.innerHTML = "";

@@ -1,7 +1,6 @@
-"""Lance le moteur d'analyse IA sur tous les actifs actifs, pour les 3
-providers (DeepSeek, Gemini, Claude). Stocke chaque analyse independamment
-en base (aucune agregation/scoring Probastock ici -- viendra dans une etape
-suivante).
+"""Lance le moteur d'analyse IA sur tous les actifs actifs, pour tous les
+providers listes dans PROVIDERS (DeepSeek, Gemini, Claude, Nemotron). Stocke
+chaque analyse independamment en base, puis agrege par ticker (app/aggregation.py).
 
 Gestion d'erreur : chaque (ticker, provider) est traite independamment.
 analyze_ticker() gere deja en interne les echecs "attendus" (troncature,
@@ -30,15 +29,17 @@ from app.aggregation import aggregate_ticker
 from app.ai_engine import analyze_ticker
 from app.db import engine
 
-PAUSE_BETWEEN_REQUESTS_SECONDS = 2  # meme pause "par courtoisie" que le batch DeepSeek existant, appliquee aux 3 providers a defaut de limite stricte documentee pour Gemini/Claude a ce volume
+PAUSE_BETWEEN_REQUESTS_SECONDS = 2  # meme pause "par courtoisie" que le batch DeepSeek existant, appliquee a tous les providers a defaut de limite stricte documentee pour Gemini/Claude/Nemotron a ce volume
 
-PROVIDERS = ["deepseek", "gemini", "claude"]
+PROVIDERS = ["deepseek", "gemini", "claude", "nemotron"]
 
 # Tarifs verifies (aout 2026), $/1M tokens (in, out) :
 PRICING = {
     "deepseek": (0.14, 0.28),
     "gemini": (0.75, 3.75),   # gemini-3.7-flash, tarif intro jusqu'au 2026-12-31
     "claude": (2.00, 10.00),  # claude-sonnet-5, tarif intro jusqu'au 2026-08-31
+    "nemotron": (0.0, 0.0),   # NVIDIA NIM free tier (build.nvidia.com) -- pas de facturation par token constatee lors du test,
+                              # mais non verifie via un tableau de bord de facturation ; a corriger ici si ca change
 }
 
 RESULTS_JSON_PATH = Path(__file__).resolve().parent.parent / "scripts" / "_last_batch_all_providers_results.json"
@@ -96,7 +97,7 @@ def main():
         agg = aggregate_ticker(ticker, successful)
         if agg is None:
             failed_providers = [p for p in PROVIDERS if not (entry.get(p) and entry[p]["ok"])]
-            print(f"[agregation] {ticker}: ignore -- seulement {len(successful)}/3 providers ok (echec : {failed_providers})")
+            print(f"[agregation] {ticker}: ignore -- seulement {len(successful)}/{len(PROVIDERS)} providers ok (echec : {failed_providers})")
             continue
         aggregated.append(agg)
         print(
@@ -134,7 +135,7 @@ def main():
         print(f"Tokens in={total_in} out={total_out}  Cout=${cost:.4f}")
         print(f"Distribution recommendation : {recos}")
 
-    print(f"\nCout total (3 providers) : ${total_cost:.4f}")
+    print(f"\nCout total ({len(PROVIDERS)} providers) : ${total_cost:.4f}")
 
     # --- Accord / desaccord entre providers, par ticker (by_ticker construit plus haut) ---
     unanimous = []
@@ -154,7 +155,7 @@ def main():
         elif len(distinct) > 1:
             disagree.append((ticker, recos))
 
-    print(f"\nTickers unanimes (3/3 providers reussis, meme recommendation) : {len(unanimous)}")
+    print(f"\nTickers unanimes ({len(PROVIDERS)}/{len(PROVIDERS)} providers reussis, meme recommendation) : {len(unanimous)}")
     print(f"Tickers en desaccord (au moins un providers different)         : {len(disagree)}")
 
     SEVERITY = {"BUY": 0, "HOLD": 1, "REDUCE": 2, "SELL": 3}

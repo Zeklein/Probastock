@@ -12,13 +12,13 @@ import sys
 from pathlib import Path
 
 RESULTS_PATH = Path(__file__).resolve().parent / "_last_batch_all_providers_results.json"
-PROVIDERS = ["deepseek", "gemini", "claude"]
+PROVIDERS = ["deepseek", "gemini", "claude", "nemotron"]
 
 # Seuil "echec significatif" : au-dela de ce nombre d'appels en echec sur les
-# 102 (34 tickers x 3 providers), ou si un provider entier est tombe a 0
+# 136 (34 tickers x 4 providers), ou si un provider entier est tombe a 0
 # succes, le run merite une alerte plutot qu'un ok silencieux. ~10% choisi
 # arbitrairement comme premier seuil raisonnable -- a ajuster avec l'usage.
-FAILURE_COUNT_THRESHOLD = 10
+FAILURE_COUNT_THRESHOLD = 14
 
 
 def main():

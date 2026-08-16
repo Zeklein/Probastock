@@ -6,8 +6,8 @@ predictions.
 
 Interface generique multi-provider : chaque provider est une fonction
 `(user_prompt: str, api_key: str) -> ProviderCallResult` enregistree dans
-PROVIDERS (deepseek, gemini, claude) -- meme prompt, meme schema JSON, meme
-validation/stockage pour les trois.
+PROVIDERS (deepseek, gemini, claude, nemotron) -- meme prompt, meme schema
+JSON, meme validation/stockage pour tous.
 """
 import json
 import os
@@ -16,6 +16,7 @@ from datetime import date, timedelta
 
 import anthropic
 import requests
+from openai import OpenAI
 from sqlalchemy import text
 
 from app.db import engine
@@ -363,16 +364,76 @@ def _call_claude(user_prompt: str, api_key: str) -> ProviderCallResult:
     )
 
 
+# NVIDIA NIM (build.nvidia.com), API compatible OpenAI -- client OpenAI standard
+# avec base_url modifiee plutot qu'un SDK dedie. "nvidia/nemotron-3-ultra-550b-a55b"
+# confirme via GET /v1/models sur ce compte (pas devine) : c'est le modele phare
+# de la famille Nemotron 3 (le plus grand, cf. les variantes "nano"/"super"/"mini"
+# plus petites dans le meme catalogue), le plus comparable en gabarit aux autres
+# providers deja en place.
+NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+NEMOTRON_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
+
+
+def _call_nemotron(user_prompt: str, api_key: str) -> ProviderCallResult:
+    client = OpenAI(base_url=NVIDIA_NIM_BASE_URL, api_key=api_key)
+    try:
+        response = client.chat.completions.create(
+            model=NEMOTRON_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=8000,  # meme marge que les autres providers (raisonnement avant le JSON final)
+            temperature=0.3,
+        )
+    except Exception as e:
+        return ProviderCallResult(provider="nemotron", model=NEMOTRON_MODEL, ok=False, error=f"appel API NVIDIA NIM echoue : {e}")
+
+    usage = response.usage
+    tokens_input = usage.prompt_tokens if usage else None
+    tokens_output = usage.completion_tokens if usage else None
+
+    content = response.choices[0].message.content if response.choices else None
+    if not content:
+        return ProviderCallResult(
+            provider="nemotron", model=NEMOTRON_MODEL, ok=False,
+            error="reponse NVIDIA NIM sans contenu exploitable",
+            tokens_input=tokens_input, tokens_output=tokens_output,
+        )
+
+    try:
+        parsed_raw = json.loads(content)
+    except json.JSONDecodeError as e:
+        return ProviderCallResult(
+            provider="nemotron", model=NEMOTRON_MODEL, ok=False, raw_content=content,
+            error=f"JSON malforme : {e}", tokens_input=tokens_input, tokens_output=tokens_output,
+        )
+
+    parsed, validation_error = _validate_analysis(parsed_raw)
+    warnings = _consistency_warnings(parsed) if parsed is not None else []
+    for w in warnings:
+        print(f"AVERTISSEMENT [ai_engine/nemotron] : {w}")
+
+    return ProviderCallResult(
+        provider="nemotron", model=NEMOTRON_MODEL, ok=parsed is not None,
+        raw_content=content, parsed=parsed, error=validation_error,
+        tokens_input=tokens_input, tokens_output=tokens_output, warnings=warnings,
+    )
+
+
 PROVIDERS = {
     "deepseek": _call_deepseek,
     "gemini": _call_gemini,
     "claude": _call_claude,
+    "nemotron": _call_nemotron,
 }
 
 PROVIDER_API_KEY_ENV = {
     "deepseek": "DEEPSEEK_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "claude": "ANTHROPIC_API_KEY",
+    "nemotron": "NVIDIA_API_KEY",
 }
 
 

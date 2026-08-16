@@ -1,10 +1,14 @@
-"""Score Probastock agrege : moyenne simple des 3 providers (DeepSeek/Gemini/
-Claude) pour un meme (asset, prediction_date), stockee dans
-predictions_aggregated.
+"""Score Probastock agrege : moyenne simple des providers ayant reussi
+(DeepSeek/Gemini/Claude/Nemotron) pour un meme (asset, prediction_date),
+stockee dans predictions_aggregated. Le nombre de providers n'est fige nulle
+part (ni dans les moyennes, ni dans la conviction) -- ajouter/retirer un
+provider n'exige aucun changement ici, juste dans PROVIDERS (ai_engine.py) et
+le batch qui appelle aggregate_ticker().
 
 Seuils recommendation_finale et formule de conviction : voir commentaires
 ci-dessous, derives de l'analyse empirique des 102 predictions individuelles
-du 2026-08-15 (34 tickers x 3 providers).
+du 2026-08-15 (34 tickers x 3 providers, avant l'ajout de Nemotron) -- a
+recalibrer une fois assez de donnees accumulees avec 4 providers.
 """
 import json
 from datetime import date as date_cls
@@ -43,9 +47,10 @@ def compute_conviction(scores: list[float]) -> float:
     """Conviction = 1 - dispersion normalisee entre les scores providers, sur le
     meme principe qu'un consensus d'analystes resserre (conviction haute) ou
     disperse (conviction basse) : on prend l'ecart max-min (0-100) plutot que
-    l'ecart-type -- avec seulement 3 points, l'ecart-type est peu lisible et
-    l'ecart max-min dit directement "les providers etaient d'accord a X points
-    pres". Normalise sur l'etendue totale possible (100) puis borne a [0, 1]."""
+    l'ecart-type -- avec un petit nombre de points (2 a 4 providers), l'ecart-type
+    est peu lisible et l'ecart max-min dit directement "les providers etaient
+    d'accord a X points pres", quel que soit le nombre de providers. Normalise
+    sur l'etendue totale possible (100) puis borne a [0, 1]."""
     if len(scores) < 2:
         return 1.0  # un seul provider : aucune dispersion a mesurer
     spread = max(scores) - min(scores)
