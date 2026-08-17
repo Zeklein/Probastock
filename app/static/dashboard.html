@@ -13,6 +13,8 @@
     --border: #e2e5ea;
     --green: #16a34a;
     --red: #dc2626;
+    --pink: #db2777;        /* couleur REDUCE (badge + jauge), meme saturation que --green/--red */
+    --pink-bg: #fce7f3;
     --sector-espace: #3b82f6;
     --sector-defense: #6b7280;
     --sector-tech: #8b5cf6;
@@ -183,21 +185,51 @@
   .return-down { color: var(--red); background: #fee2e2; }
   .return-flat { color: var(--text-muted); background: #f1f5f9; }
 
-  .rsi-row { margin-bottom: 10px; }
-  .rsi-label {
+  /* Palette recommendation_finale : BUY/HOLD/SELL reutilisent les couleurs
+     return-up/flat/down existantes (meme code couleur, pas de nouvelle
+     teinte inventee) ; REDUCE en rose (--pink) -- distinct du secteur
+     Materiaux (ambre) pour ne pas laisser croire a un lien entre les deux. */
+  .reco-reduce { color: var(--pink); background: var(--pink-bg); }
+
+  /* Badge "Signal technique" : volontairement different du badge recommendation_finale
+     (fond plein) -- contour + fond transparent, pour ne jamais le confondre avec
+     l'avis agrege des IA meme du coin de l'oeil. Memes couleurs BUY/SELL/NEUTRAL
+     que le reste de l'app (vert/rouge/gris), juste un traitement visuel distinct. */
+  .tech-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    border: 1.5px solid currentColor;
+    background: transparent;
+    display: inline-block;
+    margin-top: 4px;
+  }
+  .tech-buy { color: var(--green); }
+  .tech-sell { color: var(--red); }
+  .tech-neutral { color: var(--text-muted); }
+
+  .gauge-row { margin-bottom: 10px; }
+  .gauge-label {
     font-size: 11px;
     color: var(--text-muted);
     display: flex;
     justify-content: space-between;
     margin-bottom: 3px;
   }
-  .rsi-track {
+  /* 4 zones = seuils RECOMMENDATION_THRESHOLDS (app/aggregation.py) sur une
+     echelle 0-100 : <35 SELL, 35-49 REDUCE, 50-61 HOLD, >=62 BUY. */
+  .gauge-track {
     position: relative;
     height: 6px;
     border-radius: 3px;
-    background: linear-gradient(to right, #3b82f6 0%, #3b82f6 30%, #e2e5ea 30%, #e2e5ea 70%, #dc2626 70%, #dc2626 100%);
+    background: linear-gradient(to right,
+      var(--red) 0%, var(--red) 35%,
+      var(--pink) 35%, var(--pink) 50%,
+      #e2e5ea 50%, #e2e5ea 62%,
+      var(--green) 62%, var(--green) 100%);
   }
-  .rsi-marker {
+  .gauge-marker {
     position: absolute;
     top: -3px;
     width: 4px;
@@ -207,7 +239,12 @@
     transform: translateX(-50%);
   }
 
-  .sparkline-wrap { height: 46px; }
+  .mini-badges-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .mini-badge { font-size: 10px; padding: 3px 7px; }
+  /* Palier "moyen" partage par les badges volatilite/conviction -- les
+     paliers haut/bas reutilisent return-up/return-down/return-flat deja
+     existants, seul ce palier intermediaire n'avait pas d'equivalent. */
+  .tier-medium { color: var(--sector-materiaux); background: var(--sector-materiaux-bg); }
 
   #add-modal-overlay {
     position: fixed; inset: 0;
@@ -410,7 +447,16 @@
   }
   .analysis-grid h4 { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margin: 0 0 6px 0; }
   .analysis-grid ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.5; }
+  .analysis-grid p { margin: 0 0 4px 0; font-size: 13px; }
   .analysis-meta { font-size: 11px; color: var(--text-muted); margin-bottom: 10px; }
+
+  .conviction-row { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .conviction-label { font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .conviction-track { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+  .conviction-fill { height: 100%; border-radius: 3px; }
+
+  .tech-signal-box { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .tech-justification { font-size: 14px; margin: 8px 0 6px 0; }
 </style>
 </head>
 <body>
@@ -509,8 +555,6 @@ const SECTOR_COLOR_VARS = {
   "Benchmark": "--sector-benchmark",
 };
 
-const charts = {};
-
 function sectorColor(sector) {
   const varName = SECTOR_COLOR_VARS[sector] || "--sector-benchmark";
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
@@ -545,6 +589,87 @@ function fmtReturn(r) {
   return { text: `${pct}%`, cls: "return-flat" };
 }
 
+const RECO_CLASS = { BUY: "return-up", HOLD: "return-flat", REDUCE: "reco-reduce", SELL: "return-down" };
+
+function recoBadge(recommendation, score) {
+  if (!recommendation || score === null || score === undefined) return "";
+  const cls = RECO_CLASS[recommendation] || "return-flat";
+  return `<span class="return-badge ${cls}" title="Score Probastock agrégé (4 IA)">${recommendation} ${Math.round(score)}</span>`;
+}
+
+// Jauge de recommandation agrégée : remplace l'ancienne jauge RSI-14 sur les
+// cartes (la section RSI de la fiche détaillée n'est pas concernée). Mêmes
+// seuils que RECOMMENDATION_THRESHOLDS (app/aggregation.py) : <35 SELL,
+// 35-49 REDUCE, 50-61 HOLD, >=62 BUY -- cf. le degrade CSS .gauge-track.
+function recoGauge(recommendation, score) {
+  if (score === null || score === undefined) return "";
+  return `
+    <div class="gauge-row">
+      <div class="gauge-label"><span>Score Probastock</span><span>${recommendation || "—"} ${Math.round(score)}</span></div>
+      <div class="gauge-track">
+        <div class="gauge-marker" style="left:${score}%"></div>
+      </div>
+    </div>
+  `;
+}
+
+// Seuils de volatilite (volatility_20d, ecart-type des rendements 20j) derives
+// de la distribution reelle observee sur les 34 titres suivis (aout 2026) :
+// min 0.84%, Q1 2.87%, mediane 4.02%, Q3 5.70%, max 9.20%. <3%/3-6%/>6% colle
+// aux quartiles avec des bornes rondes faciles a lire plutot que des seuils
+// arbitraires (~10 titres faible, ~17 moyenne, ~7 elevee sur l'echantillon actuel).
+const VOLATILITY_LOW = 0.03;
+const VOLATILITY_HIGH = 0.06;
+
+function volatilityBadge(vol) {
+  if (vol === null || vol === undefined) {
+    return `<span class="return-badge return-flat mini-badge" title="Volatilité 20j">Vol n/a</span>`;
+  }
+  const cls = vol < VOLATILITY_LOW ? "return-up" : vol <= VOLATILITY_HIGH ? "tier-medium" : "return-down";
+  return `<span class="return-badge ${cls} mini-badge" title="Volatilité 20j (écart-type des rendements)">Vol ${(vol * 100).toFixed(1)}%</span>`;
+}
+
+// Memes seuils/couleurs que la barre de conviction de la fiche detaillee
+// (vert >=0.8, ambre 0.5-0.8, rouge <0.5).
+function convictionMiniBadge(conviction) {
+  if (conviction === null || conviction === undefined) return ""; // pas d'agregation ce jour -- badge absent, pas grise
+  const cls = conviction >= 0.8 ? "return-up" : conviction >= 0.5 ? "tier-medium" : "return-down";
+  return `<span class="return-badge ${cls} mini-badge" title="Conviction (accord entre les 4 providers)">Conv ${conviction.toFixed(2)}</span>`;
+}
+
+// Zone neutre +/-0.15 alignee sur l'echelle de sentiment Alpha Vantage deja
+// utilisee dans le projet (Bearish/Somewhat-Bearish/Neutral/Somewhat-Bullish/Bullish).
+function newsBadge(count, avgSentiment) {
+  if (!count) {
+    return `<span class="return-badge return-flat mini-badge" title="Aucune news sur les 7 derniers jours">0 news</span>`;
+  }
+  let cls = "return-flat";
+  let sentimentText = "";
+  if (avgSentiment !== null && avgSentiment !== undefined) {
+    cls = avgSentiment > 0.15 ? "return-up" : avgSentiment < -0.15 ? "return-down" : "return-flat";
+    sentimentText = `, ${avgSentiment >= 0 ? "+" : ""}${avgSentiment.toFixed(2)}`;
+  }
+  return `<span class="return-badge ${cls} mini-badge" title="News des 7 derniers jours, toutes sources confondues">${count} news${sentimentText}</span>`;
+}
+
+function miniBadgesRow(asset) {
+  return `
+    <div class="mini-badges-row">
+      ${volatilityBadge(asset.volatility_20d)}
+      ${convictionMiniBadge(asset.conviction)}
+      ${newsBadge(asset.news_count_7d, asset.news_avg_sentiment_7d)}
+    </div>
+  `;
+}
+
+const TECH_CLASS = { BUY: "tech-buy", SELL: "tech-sell", NEUTRAL: "tech-neutral" };
+
+function technicalBadge(signal, justification) {
+  if (!signal) return "";
+  const cls = TECH_CLASS[signal] || "tech-neutral";
+  return `<span class="tech-badge ${cls}" title="Signal technique RSI — indépendant de l'analyse IA : ${justification || ""}">Signal RSI : ${signal}</span>`;
+}
+
 function buildCard(asset) {
   const card = document.createElement("div");
   card.className = "card";
@@ -553,8 +678,6 @@ function buildCard(asset) {
   const ret = fmtReturn(asset.return_1d);
   const close = asset.close !== null && asset.close !== undefined ? asset.close.toFixed(2) : "N/A";
   const dateInfo = fmtTradeDate(asset.trade_date);
-  const rsi = asset.rsi_14;
-  const canvasId = `spark-${asset.ticker.replace(/[^a-zA-Z0-9]/g, "_")}`;
 
   card.innerHTML = `
     <div class="card-top">
@@ -570,15 +693,12 @@ function buildCard(asset) {
     <div class="price-row">
       <span class="close-price">${close}</span>
       <span class="return-badge ${ret.cls}">${ret.text}</span>
+      ${recoBadge(asset.recommendation_finale, asset.score_agrege)}
     </div>
+    <div>${technicalBadge(asset.technical_signal, asset.technical_justification)}</div>
     <div class="price-date${dateInfo.stale ? " stale" : ""}">${dateInfo.text}</div>
-    <div class="rsi-row">
-      <div class="rsi-label"><span>RSI-14</span><span>${rsi !== null && rsi !== undefined ? rsi.toFixed(1) : "N/A"}</span></div>
-      <div class="rsi-track">
-        ${rsi !== null && rsi !== undefined ? `<div class="rsi-marker" style="left:${rsi}%"></div>` : ""}
-      </div>
-    </div>
-    <div class="sparkline-wrap"><canvas id="${canvasId}"></canvas></div>
+    ${recoGauge(asset.recommendation_finale, asset.score_agrege)}
+    ${miniBadgesRow(asset)}
   `;
 
   card.addEventListener("click", () => openDetail(asset.ticker));
@@ -600,34 +720,6 @@ function buildCard(asset) {
     btn.textContent = data.is_favorite ? "★" : "☆";
     btn.classList.toggle("active", data.is_favorite);
     if (filterState.favoritesOnly && !data.is_favorite) renderDashboard(); // retire la carte si le filtre favoris est actif
-  });
-
-  requestAnimationFrame(() => {
-    const ctx = card.querySelector(`#${CSS.escape(canvasId)}`);
-    if (!ctx || !asset.sparkline || asset.sparkline.length === 0) return;
-    const lineColor = asset.sparkline[asset.sparkline.length - 1].close >= asset.sparkline[0].close
-      ? getComputedStyle(document.documentElement).getPropertyValue("--green").trim()
-      : getComputedStyle(document.documentElement).getPropertyValue("--red").trim();
-    charts[canvasId] = new Chart(ctx, {
-      type: "line",
-      data: {
-        labels: asset.sparkline.map(p => p.trade_date),
-        datasets: [{
-          data: asset.sparkline.map(p => p.close),
-          borderColor: lineColor,
-          borderWidth: 1.5,
-          pointRadius: 0,
-          fill: false,
-          tension: 0.25,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: { x: { display: false }, y: { display: false } },
-        plugins: { legend: { display: false }, tooltip: { enabled: false } },
-      },
-    });
   });
 
   return card;
@@ -689,9 +781,6 @@ function applyFiltersAndSort() {
 }
 
 function renderDashboard() {
-  Object.values(charts).forEach(c => c.destroy());
-  for (const key in charts) delete charts[key];
-
   const view = document.getElementById("dashboard-cards");
   view.innerHTML = "";
 
@@ -966,18 +1055,99 @@ async function openDetail(ticker) {
   document.getElementById("detail-sector").textContent = "";
   document.getElementById("detail-body").innerHTML = '<div class="empty-note">Chargement…</div>';
 
-  const res = await fetch(`/api/assets/${encodeURIComponent(ticker)}/detail`);
+  const [res, ficheRes] = await Promise.all([
+    fetch(`/api/assets/${encodeURIComponent(ticker)}/detail`),
+    fetch(`/api/assets/${encodeURIComponent(ticker)}/fiche`), // deja calcule PER/targets, reutilise tel quel (aucun changement au moteur IA)
+  ]);
   if (!res.ok) {
     document.getElementById("detail-body").innerHTML = '<div class="empty-note">Erreur de chargement des données.</div>';
     return;
   }
-  renderDetail(await res.json());
+  const data = await res.json();
+  data.fiche = ficheRes.ok ? await ficheRes.json() : null; // /fiche degrade proprement (yfinance indispo) -- pas bloquant pour le reste de la fiche detaillee
+  renderDetail(data);
 }
 
 function closeDetail() {
   document.getElementById("detail-overlay").classList.add("hidden");
   Object.values(detailCharts).forEach(c => c.destroy());
   detailCharts = {};
+}
+
+function convictionBlock(agg) {
+  if (!agg || agg.conviction === null || agg.conviction === undefined) return "";
+  const pct = Math.round(agg.conviction * 100);
+  const color = agg.conviction >= 0.8 ? "var(--green)" : agg.conviction >= 0.5 ? "var(--sector-materiaux)" : "var(--red)";
+  const score = agg.score_agrege !== null && agg.score_agrege !== undefined ? Math.round(agg.score_agrege) : "—";
+  return `
+    <div class="conviction-row">
+      <div class="conviction-label"><span>Score agrégé : ${agg.recommendation_finale || "—"} ${score}</span><span>Conviction : ${agg.conviction.toFixed(2)}</span></div>
+      <div class="conviction-track"><div class="conviction-fill" style="width:${pct}%; background:${color};"></div></div>
+    </div>
+  `;
+}
+
+function technicalSection(tech) {
+  if (!tech) {
+    return '<div class="empty-note">Historique insuffisant pour calculer un signal technique.</div>';
+  }
+  const cls = TECH_CLASS[tech.signal] || "tech-neutral";
+  const rsiText = tech.rsi_today !== null && tech.rsi_today !== undefined ? tech.rsi_today.toFixed(1) : "N/A";
+  return `
+    <div class="tech-signal-box">
+      <span class="tech-badge ${cls}" style="font-size:13px; padding:4px 10px;">Signal RSI : ${tech.signal}</span>
+      <p class="tech-justification">${esc(tech.justification)}</p>
+      <div class="analysis-meta">RSI-14 au ${tech.trade_date} : ${rsiText} — basé uniquement sur RSI/volume, sans lien avec l'analyse IA.</div>
+    </div>
+  `;
+}
+
+function valuationSection(fiche) {
+  if (!fiche) return '<div class="empty-note">Données de valorisation indisponibles.</div>';
+
+  const val = fiche.valorisation || {};
+  const consensus = fiche.consensus_analystes || {};
+  const targetsA = (fiche.targets && fiche.targets.analystes) || {};
+  const targetsT = fiche.targets && fiche.targets.technique_probastock;
+
+  const perCourant = val.per_annee_courante_label || (val.per_annee_courante != null ? val.per_annee_courante.toFixed(2) : "N/A");
+  const perY1 = val.per_y1_label || (val.per_y1 != null ? val.per_y1.toFixed(2) : "N/A");
+
+  let targetAnalysteHtml;
+  if (targetsA.label_absence) {
+    targetAnalysteHtml = `<p>${targetsA.label_absence}</p>`;
+  } else {
+    const nbAnalystes = consensus.nb_analystes ? ` (${consensus.nb_analystes} analystes)` : "";
+    targetAnalysteHtml = `
+      <p>Moyenne : ${targetsA.mean != null ? targetsA.mean.toFixed(2) : "N/A"}${nbAnalystes}</p>
+      <p>Haut : ${targetsA.high != null ? targetsA.high.toFixed(2) : "N/A"} / Bas : ${targetsA.low != null ? targetsA.low.toFixed(2) : "N/A"}</p>
+    `;
+  }
+
+  const targetTechHtml = targetsT
+    ? `
+      <p>Haut : ${targetsT.high.toFixed(2)} / Bas : ${targetsT.low.toFixed(2)}</p>
+      <p style="font-size:11px; color:var(--text-muted);">${targetsT.n_seances_disponibles}/${targetsT.n_seances_visees} séances, élargi de +/- volatilité 20j</p>
+    `
+    : "<p>N/A</p>";
+
+  return `
+    <div class="analysis-grid">
+      <div>
+        <h4>PER</h4>
+        <p>Année courante : ${perCourant}</p>
+        <p>Y+1 (estimation) : ${perY1}</p>
+      </div>
+      <div>
+        <h4>Target analystes</h4>
+        ${targetAnalysteHtml}
+      </div>
+      <div>
+        <h4>Target technique Probastock</h4>
+        ${targetTechHtml}
+      </div>
+    </div>
+  `;
 }
 
 function renderDetail(data) {
@@ -995,11 +1165,20 @@ function renderDetail(data) {
       <div class="chart-rsi-wrap"><canvas id="detail-rsi-chart"></canvas></div>
     </div>
     <div class="chart-section">
+      <h3>Signal technique (RSI) — indépendant de l'analyse IA</h3>
+      ${technicalSection(data.technical_signal)}
+    </div>
+    <div class="chart-section">
       <h3>Volume</h3>
       <div class="chart-volume-wrap"><canvas id="detail-volume-chart"></canvas></div>
     </div>
     <div class="chart-section">
+      <h3>Valorisation &amp; Targets</h3>
+      ${valuationSection(data.fiche)}
+    </div>
+    <div class="chart-section">
       <h3>Analyse Probastock</h3>
+      ${convictionBlock(data.aggregated)}
       <div id="analysis-box">
         <div class="analysis-placeholder">
           <span>Aucune analyse IA pour l'instant.</span>

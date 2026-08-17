@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.fiche_enrichment import NOT_COVERED, RECOMMENDATION_SCALE_NOTE, fetch_analyst_enrichment
+from app.technical_signal import get_signal_for_asset, get_signals_for_assets
 
 app = FastAPI(title="Probastock", version="0.1.0")
 
@@ -57,7 +58,7 @@ def _geo_zone(ticker: str) -> str:
 # un actif sans agregation pour l'instant a simplement score_agrege=None.
 LATEST_AGGREGATED_SQL = text(
     """
-    SELECT DISTINCT ON (asset_id) asset_id, score_agrege, recommendation_finale
+    SELECT DISTINCT ON (asset_id) asset_id, score_agrege, recommendation_finale, conviction, prediction_date
     FROM predictions_aggregated
     ORDER BY asset_id, prediction_date DESC
     """
@@ -68,9 +69,25 @@ LATEST_AGGREGATED_SQL = text(
 LATEST_FEATURES_SQL = text(
     """
     SELECT DISTINCT ON (asset_id)
-        asset_id, return_1d, rsi_14, sma_20
+        asset_id, return_1d, rsi_14, sma_20, volatility_20d
     FROM features_daily
     ORDER BY asset_id, trade_date DESC
+    """
+)
+
+# Volume et sentiment moyen des news des 7 derniers jours, toutes sources
+# confondues (news_items.sentiment_score est deja normalise -1/+1 a la
+# collecte -- cf. sentiment_for_ticker() dans scripts/collect_news*.py, qui
+# fait ce travail au moment de l'ingestion depuis chaque API, pas ici : ce
+# n'est pas reutilisable telle quelle sur des lignes deja stockees en base,
+# donc simple moyenne SQL sur la colonne deja peuplee). AVG ignore les NULL
+# (ex: Finnhub, qui ne fournit pas de sentiment) automatiquement.
+NEWS_SUMMARY_SQL = text(
+    """
+    SELECT asset_id, count(*) AS n_articles, avg(sentiment_score) AS avg_sentiment
+    FROM news_items
+    WHERE published_at >= now() - interval '7 days'
+    GROUP BY asset_id
     """
 )
 
@@ -122,6 +139,13 @@ def dashboard():
         sparkline_by_asset = defaultdict(list)
         for r in conn.execute(SPARKLINE_SQL, {"sparkline_days": SPARKLINE_DAYS}).mappings().all():
             sparkline_by_asset[r["asset_id"]].append({"trade_date": r["trade_date"], "close": r["close"]})
+        news_by_asset = {
+            r["asset_id"]: r for r in conn.execute(NEWS_SUMMARY_SQL).mappings().all()
+        }
+
+    # Signal technique RSI : independant du score Probastock (agg_by_asset
+    # ci-dessus), calcule a part par app/technical_signal.py.
+    technical_by_asset = get_signals_for_assets([a["id"] for a in assets])
 
     result = defaultdict(list)
     for asset in assets:
@@ -133,6 +157,8 @@ def dashboard():
         trade_date = sparkline[-1]["trade_date"]
         features = features_by_asset.get(asset["id"], {})
         agg = agg_by_asset.get(asset["id"], {})
+        tech = technical_by_asset.get(asset["id"])
+        news = news_by_asset.get(asset["id"], {})
         sma_20 = features.get("sma_20")
 
         trend = None
@@ -153,6 +179,13 @@ def dashboard():
                 "geo_zone": _geo_zone(asset["ticker"]),
                 "score_agrege": agg.get("score_agrege"),
                 "recommendation_finale": agg.get("recommendation_finale"),
+                "prediction_date": agg.get("prediction_date"),
+                "technical_signal": tech.signal if tech else None,
+                "technical_justification": tech.justification if tech else None,
+                "volatility_20d": features.get("volatility_20d"),
+                "conviction": agg.get("conviction"),
+                "news_count_7d": news.get("n_articles", 0),
+                "news_avg_sentiment_7d": news.get("avg_sentiment"),
             }
         )
 
@@ -286,6 +319,17 @@ DETAIL_INDICATORS_SQL = text(
 )
 
 
+LATEST_AGGREGATED_ONE_SQL = text(
+    """
+    SELECT score_agrege, recommendation_finale, conviction, prediction_date
+    FROM predictions_aggregated
+    WHERE asset_id = :asset_id
+    ORDER BY prediction_date DESC
+    LIMIT 1
+    """
+)
+
+
 @app.get("/api/assets/{ticker}/detail")
 def asset_detail(ticker: str):
     with engine.connect() as conn:
@@ -302,6 +346,11 @@ def asset_detail(ticker: str):
         indicators_history = conn.execute(
             DETAIL_INDICATORS_SQL, {"asset_id": asset["id"], "days": DETAIL_INDICATORS_DAYS}
         ).mappings().all()
+        aggregated = conn.execute(LATEST_AGGREGATED_ONE_SQL, {"asset_id": asset["id"]}).mappings().first()
+
+    # Signal technique RSI : independant du score Probastock (aggregated
+    # ci-dessus), calcule a part par app/technical_signal.py.
+    tech = get_signal_for_asset(asset["id"])
 
     return {
         "ticker": asset["ticker"],
@@ -310,6 +359,13 @@ def asset_detail(ticker: str):
         "asset_type": asset["asset_type"],
         "price_history": list(price_history),
         "indicators_history": list(indicators_history),
+        "aggregated": dict(aggregated) if aggregated else None,
+        "technical_signal": {
+            "signal": tech.signal,
+            "justification": tech.justification,
+            "rsi_today": tech.rsi_today,
+            "trade_date": tech.trade_date,
+        } if tech else None,
     }
 
 
