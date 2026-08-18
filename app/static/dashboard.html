@@ -181,6 +181,9 @@
     padding: 2px 6px;
     border-radius: 4px;
   }
+  /* .news-badge est un <button> (clic pour ouvrir la fiche) -- reset des
+     styles par defaut du navigateur pour garder l'apparence d'un badge. */
+  .news-badge { border: none; font-family: inherit; cursor: pointer; }
   .return-up { color: var(--green); background: #dcfce7; }
   .return-down { color: var(--red); background: #fee2e2; }
   .return-flat { color: var(--text-muted); background: #f1f5f9; }
@@ -337,6 +340,26 @@
   .dashboard-toolbar label { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
   .fav-filter-label { color: var(--text) !important; cursor: pointer; }
 
+  .badge-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    margin-bottom: 16px;
+    padding: 10px 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .legend-group { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .legend-title { font-weight: 600; color: var(--text); }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .legend-dot.dot-green { background: var(--green); }
+  .legend-dot.dot-amber { background: var(--sector-materiaux); }
+  .legend-dot.dot-red { background: var(--red); }
+
   table.tracking-table { width: 100%; border-collapse: collapse; background: var(--card-bg); border-radius: 8px; overflow: hidden; font-size: 13px; }
   table.tracking-table th, table.tracking-table td {
     text-align: left;
@@ -448,6 +471,14 @@
   .analysis-grid h4 { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margin: 0 0 6px 0; }
   .analysis-grid ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.5; }
   .analysis-grid p { margin: 0 0 4px 0; font-size: 13px; }
+
+  .news-subheading { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); margin: 14px 0 6px 0; }
+  .news-subheading:first-child { margin-top: 0; }
+  .news-item { padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .news-item:last-child { border-bottom: none; }
+  .news-item-title { font-size: 13px; font-weight: 600; }
+  .news-item-date { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .news-item-summary { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
   .analysis-meta { font-size: 11px; color: var(--text-muted); margin-bottom: 10px; }
 
   .conviction-row { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
@@ -486,6 +517,20 @@
           <option value="zone">Zone géographique</option>
         </select>
       </label>
+    </div>
+    <div class="badge-legend">
+      <div class="legend-group">
+        <span class="legend-title">Volatilité (20j) :</span>
+        <span class="legend-item"><span class="legend-dot dot-green"></span>&lt; 3% (faible)</span>
+        <span class="legend-item"><span class="legend-dot dot-amber"></span>3-6% (moyenne)</span>
+        <span class="legend-item"><span class="legend-dot dot-red"></span>&gt; 6% (élevée)</span>
+      </div>
+      <div class="legend-group">
+        <span class="legend-title">Conviction :</span>
+        <span class="legend-item"><span class="legend-dot dot-green"></span>≥ 0,80 (fort accord)</span>
+        <span class="legend-item"><span class="legend-dot dot-amber"></span>0,50-0,80 (accord modéré)</span>
+        <span class="legend-item"><span class="legend-dot dot-red"></span>&lt; 0,50 (désaccord marqué)</span>
+      </div>
     </div>
     <div id="dashboard-cards"><div class="empty-note">Chargement…</div></div>
   </div>
@@ -623,10 +668,10 @@ const VOLATILITY_HIGH = 0.06;
 
 function volatilityBadge(vol) {
   if (vol === null || vol === undefined) {
-    return `<span class="return-badge return-flat mini-badge" title="Volatilité 20j">Vol n/a</span>`;
+    return `<span class="return-badge return-flat mini-badge" title="Volatilité 20j">Volatility n/a</span>`;
   }
   const cls = vol < VOLATILITY_LOW ? "return-up" : vol <= VOLATILITY_HIGH ? "tier-medium" : "return-down";
-  return `<span class="return-badge ${cls} mini-badge" title="Volatilité 20j (écart-type des rendements)">Vol ${(vol * 100).toFixed(1)}%</span>`;
+  return `<span class="return-badge ${cls} mini-badge" title="Volatilité 20j (écart-type des rendements)">Volatility ${(vol * 100).toFixed(1)}%</span>`;
 }
 
 // Memes seuils/couleurs que la barre de conviction de la fiche detaillee
@@ -634,14 +679,14 @@ function volatilityBadge(vol) {
 function convictionMiniBadge(conviction) {
   if (conviction === null || conviction === undefined) return ""; // pas d'agregation ce jour -- badge absent, pas grise
   const cls = conviction >= 0.8 ? "return-up" : conviction >= 0.5 ? "tier-medium" : "return-down";
-  return `<span class="return-badge ${cls} mini-badge" title="Conviction (accord entre les 4 providers)">Conv ${conviction.toFixed(2)}</span>`;
+  return `<span class="return-badge ${cls} mini-badge" title="Conviction (accord entre les 4 providers)">Conviction ${conviction.toFixed(2)}</span>`;
 }
 
 // Zone neutre +/-0.15 alignee sur l'echelle de sentiment Alpha Vantage deja
 // utilisee dans le projet (Bearish/Somewhat-Bearish/Neutral/Somewhat-Bullish/Bullish).
 function newsBadge(count, avgSentiment) {
   if (!count) {
-    return `<span class="return-badge return-flat mini-badge" title="Aucune news sur les 7 derniers jours">0 news</span>`;
+    return `<button class="return-badge return-flat mini-badge news-badge" title="Aucune news sur les 7 derniers jours — cliquer pour ouvrir la fiche">0 news</button>`;
   }
   let cls = "return-flat";
   let sentimentText = "";
@@ -649,7 +694,7 @@ function newsBadge(count, avgSentiment) {
     cls = avgSentiment > 0.15 ? "return-up" : avgSentiment < -0.15 ? "return-down" : "return-flat";
     sentimentText = `, ${avgSentiment >= 0 ? "+" : ""}${avgSentiment.toFixed(2)}`;
   }
-  return `<span class="return-badge ${cls} mini-badge" title="News des 7 derniers jours, toutes sources confondues">${count} news${sentimentText}</span>`;
+  return `<button class="return-badge ${cls} mini-badge news-badge" title="News des 7 derniers jours, toutes sources confondues — cliquer pour les voir">${count} news${sentimentText}</button>`;
 }
 
 function miniBadgesRow(asset) {
@@ -720,6 +765,10 @@ function buildCard(asset) {
     btn.textContent = data.is_favorite ? "★" : "☆";
     btn.classList.toggle("active", data.is_favorite);
     if (filterState.favoritesOnly && !data.is_favorite) renderDashboard(); // retire la carte si le filtre favoris est actif
+  });
+  card.querySelector(".news-badge").addEventListener("click", (e) => {
+    e.stopPropagation();
+    openDetail(asset.ticker, { scrollToNews: true });
   });
 
   return card;
@@ -1048,7 +1097,7 @@ document.getElementById("add-form").addEventListener("submit", async (e) => {
 
 let detailCharts = {};
 
-async function openDetail(ticker) {
+async function openDetail(ticker, opts = {}) {
   document.getElementById("detail-overlay").classList.remove("hidden");
   document.getElementById("detail-ticker").textContent = ticker;
   document.getElementById("detail-name").textContent = "";
@@ -1066,6 +1115,10 @@ async function openDetail(ticker) {
   const data = await res.json();
   data.fiche = ficheRes.ok ? await ficheRes.json() : null; // /fiche degrade proprement (yfinance indispo) -- pas bloquant pour le reste de la fiche detaillee
   renderDetail(data);
+
+  if (opts.scrollToNews) {
+    document.getElementById("detail-news-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 
 function closeDetail() {
@@ -1099,6 +1152,36 @@ function technicalSection(tech) {
       <p class="tech-justification">${esc(tech.justification)}</p>
       <div class="analysis-meta">RSI-14 au ${tech.trade_date} : ${rsiText} — basé uniquement sur RSI/volume, sans lien avec l'analyse IA.</div>
     </div>
+  `;
+}
+
+function fmtNewsSentiment(score) {
+  if (score === null || score === undefined) return "";
+  const cls = score > 0.15 ? "return-up" : score < -0.15 ? "return-down" : "return-flat";
+  return `<span class="return-badge ${cls}" style="font-size:10px; padding:1px 5px; margin-left:6px;">${score >= 0 ? "+" : ""}${score.toFixed(2)}</span>`;
+}
+
+function newsItemHtml(item, withSummary) {
+  const date = item.published_at ? item.published_at.slice(0, 10) : "";
+  return `
+    <div class="news-item">
+      <div class="news-item-title">${esc(item.title)}${fmtNewsSentiment(item.sentiment_score)}</div>
+      <div class="news-item-date">${date}</div>
+      ${withSummary && item.summary ? `<div class="news-item-summary">${esc(item.summary)}</div>` : ""}
+    </div>
+  `;
+}
+
+function newsListSection(fiche) {
+  if (!fiche) return '<div class="empty-note">Données de news indisponibles.</div>';
+  const recent = (fiche.news && fiche.news.last_7d) || [];
+  const older = (fiche.news && fiche.news.last_8_30d) || [];
+  if (recent.length === 0 && older.length === 0) {
+    return '<div class="empty-note">Aucune news collectée récemment pour ce titre.</div>';
+  }
+  return `
+    ${recent.length ? `<h4 class="news-subheading">7 derniers jours (${recent.length})</h4>${recent.map(n => newsItemHtml(n, true)).join("")}` : ""}
+    ${older.length ? `<h4 class="news-subheading">8-30 derniers jours (${older.length})</h4>${older.map(n => newsItemHtml(n, false)).join("")}` : ""}
   `;
 }
 
@@ -1175,6 +1258,10 @@ function renderDetail(data) {
     <div class="chart-section">
       <h3>Valorisation &amp; Targets</h3>
       ${valuationSection(data.fiche)}
+    </div>
+    <div class="chart-section" id="detail-news-section">
+      <h3>News</h3>
+      ${newsListSection(data.fiche)}
     </div>
     <div class="chart-section">
       <h3>Analyse Probastock</h3>
