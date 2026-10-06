@@ -531,6 +531,12 @@
         <span class="legend-item"><span class="legend-dot dot-amber"></span>0,50-0,80 (accord modéré)</span>
         <span class="legend-item"><span class="legend-dot dot-red"></span>&lt; 0,50 (désaccord marqué)</span>
       </div>
+      <div class="legend-group">
+        <span class="legend-title">Momentum (vs SPY) :</span>
+        <span class="legend-item"><span class="legend-dot dot-green"></span>▲ tendance confirmée</span>
+        <span class="legend-item"><span class="legend-dot dot-amber"></span>↘ repli / ↗ rebond (signaux mixtes)</span>
+        <span class="legend-item"><span class="legend-dot dot-red"></span>▼ tendance baissière</span>
+      </div>
     </div>
     <div id="dashboard-cards"><div class="empty-note">Chargement…</div></div>
   </div>
@@ -697,9 +703,44 @@ function newsBadge(count, avgSentiment) {
   return `<button class="return-badge ${cls} mini-badge news-badge" title="News des 7 derniers jours, toutes sources confondues — cliquer pour les voir">${count} news${sentimentText}</button>`;
 }
 
+// Momentum relatif vs benchmark (app/momentum.py, snapshot du soir par
+// scripts/compute_momentum.py). L'etat croise le biais de fond (12-1 mois et 3 mois)
+// et le timing (1 mois et 5 jours) ; les libelles doivent rester identiques a ceux
+// de app/momentum.py. Pas de snapshot (premier jour, table absente) : badge absent,
+// pas grise -- meme regle que la conviction.
+const MOMENTUM_STATES = {
+  "tendance confirmée": { cls: "return-up", glyph: "▲" },
+  "repli dans la tendance": { cls: "tier-medium", glyph: "↘" },
+  "rebond contre-tendance": { cls: "tier-medium", glyph: "↗" },
+  "tendance baissière": { cls: "return-down", glyph: "▼" },
+};
+
+function fmtExcessPts(x) {
+  if (x === null || x === undefined) return "n/a";
+  return `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)} pts`;
+}
+
+function momentumBadge(m) {
+  if (!m) return "";
+  if (m.score === null || m.score === undefined) {
+    return `<span class="return-badge return-flat mini-badge" title="Momentum : historique insuffisant">Momentum n/a</span>`;
+  }
+  const st = MOMENTUM_STATES[m.state] || { cls: "return-flat", glyph: "•" };
+  const ex = m.excess || {};
+  const lines = [
+    `Momentum relatif vs ${m.benchmark || "SPY"} (au ${m.as_of})`,
+    `État : ${m.state}`,
+    `Alignement : ${m.alignment}/${m.n_measures} mesures devant le benchmark`,
+    `Excès de rendement — 12-1 mois : ${fmtExcessPts(ex.r12_1)} · 3 mois : ${fmtExcessPts(ex.r3m)} · 1 mois : ${fmtExcessPts(ex.r1m)} · 5 jours : ${fmtExcessPts(ex.r5d)}`,
+  ];
+  const title = esc(lines.join("\n")).replace(/"/g, "&quot;");
+  return `<span class="return-badge ${st.cls} mini-badge" title="${title}">${st.glyph} Momentum ${Math.round(m.score)}</span>`;
+}
+
 function miniBadgesRow(asset) {
   return `
     <div class="mini-badges-row">
+      ${momentumBadge(asset.momentum)}
       ${volatilityBadge(asset.volatility_20d)}
       ${convictionMiniBadge(asset.conviction)}
       ${newsBadge(asset.news_count_7d, asset.news_avg_sentiment_7d)}

@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 from app.db import engine
 from app.fiche_enrichment import NOT_COVERED, RECOMMENDATION_SCALE_NOTE, fetch_analyst_enrichment
@@ -74,6 +75,36 @@ LATEST_FEATURES_SQL = text(
     ORDER BY asset_id, trade_date DESC
     """
 )
+
+# Dernier momentum par actif (cf. app/momentum.py, ecrit par scripts/compute_momentum.py).
+# On ne garde que la config_version la plus recente : si les parametres changent
+# un jour, les cartes suivent la nouvelle version sans toucher a ce code, et deux
+# versions calculees le meme jour ne se melangent pas.
+LATEST_MOMENTUM_SQL = text(
+    """
+    SELECT DISTINCT ON (asset_id)
+        asset_id, as_of, benchmark, score, state, alignment, n_measures,
+        ex_r12_1, ex_r3m, ex_r1m, ex_r5d
+    FROM momentum_snapshots
+    WHERE config_version = (
+        SELECT config_version FROM momentum_snapshots ORDER BY created_at DESC LIMIT 1
+    )
+    ORDER BY asset_id, as_of DESC
+    """
+)
+
+
+def _latest_momentum():
+    """Connexion separee de celle du dashboard : tant que la migration n'a pas tourne
+    (premier run du workflow momentum.yml), la table n'existe pas, et une erreur SQL
+    dans la transaction principale ferait echouer toutes les requetes suivantes.
+    Table absente -> aucun momentum, les cartes s'affichent sans le badge."""
+    try:
+        with engine.connect() as conn:
+            return {r["asset_id"]: r for r in conn.execute(LATEST_MOMENTUM_SQL).mappings().all()}
+    except ProgrammingError:
+        return {}
+
 
 # Volume et sentiment moyen des news des 7 derniers jours, toutes sources
 # confondues (news_items.sentiment_score est deja normalise -1/+1 a la
@@ -147,6 +178,8 @@ def dashboard():
     # ci-dessus), calcule a part par app/technical_signal.py.
     technical_by_asset = get_signals_for_assets([a["id"] for a in assets])
 
+    momentum_by_asset = _latest_momentum()
+
     result = defaultdict(list)
     for asset in assets:
         sparkline = sparkline_by_asset.get(asset["id"], [])
@@ -159,6 +192,7 @@ def dashboard():
         agg = agg_by_asset.get(asset["id"], {})
         tech = technical_by_asset.get(asset["id"])
         news = news_by_asset.get(asset["id"], {})
+        mom = momentum_by_asset.get(asset["id"])
         sma_20 = features.get("sma_20")
 
         trend = None
@@ -186,6 +220,22 @@ def dashboard():
                 "conviction": agg.get("conviction"),
                 "news_count_7d": news.get("n_articles", 0),
                 "news_avg_sentiment_7d": news.get("avg_sentiment"),
+                "momentum": None
+                if mom is None
+                else {
+                    "score": mom["score"],
+                    "state": mom["state"],
+                    "alignment": mom["alignment"],
+                    "n_measures": mom["n_measures"],
+                    "as_of": mom["as_of"],
+                    "benchmark": mom["benchmark"],
+                    "excess": {
+                        "r12_1": mom["ex_r12_1"],
+                        "r3m": mom["ex_r3m"],
+                        "r1m": mom["ex_r1m"],
+                        "r5d": mom["ex_r5d"],
+                    },
+                },
             }
         )
 

@@ -1,0 +1,60 @@
+name: Momentum quotidien (snapshot et résultats)
+
+on:
+  schedule:
+    # 22:15 UTC, du lundi au vendredi : 45 min apres la collecte des cours
+    # (21:30 UTC, cf. collect_prices.yml), donc apres la cloture de New York
+    # (20:00 UTC en heure d'ete, 21:00 UTC en heure d'hiver). Le calcul ne lit que
+    # la base : aucun appel a Yahoo Finance ici.
+    - cron: "15 22 * * 1-5"
+  workflow_dispatch: {}
+
+concurrency:
+  group: momentum
+  cancel-in-progress: false
+
+jobs:
+  momentum:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: pip install -r requirements.txt
+
+      # Idempotent (IF NOT EXISTS) : les tables sont creees au premier run, sans
+      # etape manuelle, et ne sont jamais modifiees ensuite.
+      - run: python scripts/migrate_add_momentum.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # Snapshot du jour : immuable, un seul par (actif, date, version de config).
+      # `shell: bash` active pipefail : un echec du script fait echouer l'etape
+      # malgre le `| tee`.
+      - name: Snapshot momentum du jour
+        shell: bash
+        run: python scripts/compute_momentum.py | tee momentum_output.log
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # Resultats reels des snapshots arrives a echeance (5, 20, 60 seances).
+      - name: Résultats des snapshots arrivés à échéance
+        shell: bash
+        run: python scripts/compute_momentum.py --settle | tee momentum_settle.log
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Résumé lisible dans l'onglet Summary de GitHub Actions
+        if: always()
+        run: |
+          echo "## Momentum — snapshot du jour" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat momentum_output.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "(pas de sortie)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "## Momentum — résultats arrivés à échéance" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat momentum_settle.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "(pas de sortie)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
