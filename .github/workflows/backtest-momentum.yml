@@ -1,0 +1,38 @@
+name: Backtest momentum (manuel)
+
+# Lancement a la demande uniquement (onglet Actions > "Backtest momentum (manuel)" > Run workflow).
+# Lecture seule sur la base : le script ne fait que des SELECT.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dependances
+        run: pip install "psycopg[binary]" pandas numpy
+
+      - name: Backtest du momentum sur l'historique des cours
+        shell: bash
+        run: python scripts/backtest_momentum.py --out backtest_observations.csv | tee backtest_output.log
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Resultats dans l'onglet Summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## Backtest momentum" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat backtest_output.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "(pas de sortie)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
